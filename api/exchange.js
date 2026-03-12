@@ -46,23 +46,19 @@ module.exports = async (req, res) => {
 
 // 抓取中国银行牌价
 async function fetchBOCRates() {
-  // 伪装浏览器请求
   const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'Referer': 'https://www.boc.cn/',
-    'Connection': 'keep-alive'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+    'Referer': 'https://www.boc.cn/'
   };
   
   const response = await fetch(BOC_URL, { headers, timeout: 10000 });
   const html = await response.text();
   
-  // 提取汇率数据
-  const rates = {};
   const today = new Date().toISOString().split('T')[0];
   
-  // 支持的货币
+  // 货币映射
   const currencyMap = {
     '美元': 'USD',
     '欧元': 'EUR', 
@@ -75,43 +71,42 @@ async function fetchBOCRates() {
     '瑞士法郎': 'CHF'
   };
   
-  // 简单正则提取（实际可能需要更复杂的HTML解析）
-  // 中国银行牌价表格式比较固定
+  const rates = {};
+  
+  // 提取牌价（现汇买入价 现钞买入价 现汇卖出价 中行折算价）
   for (const [cnName, code] of Object.entries(currencyMap)) {
-    // 匹配货币名称后面的现汇买入价、现钞买入价、现汇卖出价、中行折算价
     const pattern = new RegExp(`${cnName}[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>`);
     const match = html.match(pattern);
     
     if (match && match[4]) {
-      // 使用中行折算价（第4个数字）
-      const rate = parseFloat(match[4]);
-      if (!isNaN(rate) && rate > 0) {
-        rates[code] = rate;
+      // 中行折算价（100外币兑人民币）
+      const zhonghangRate = parseFloat(match[4]);
+      if (!isNaN(zhonghangRate) && zhonghangRate > 0) {
+        // 100外币 = X人民币，所以 1外币 = X/100人民币
+        // 要算 1 USD = ? 外币，需要先知道 USD/CNY 汇率
+        rates[code] = zhonghangRate;
       }
     }
   }
   
-  // 特殊处理：中国银行牌价是100外币兑人民币，需要转换
-  // 同时要计算交叉汇率
+  // 转换为以USD为基准的汇率
   if (rates.USD) {
-    // USD/CNY 汇率（中行牌价是100美元兑多少人民币）
-    const usdCnyRate = rates.USD / 100; // 转为1美元兑多少人民币
-    
-    // 计算其他货币兑USD的汇率
-    const usdBasedRates = { USD: 1.0 };
+    const usdCnyRate = rates.USD; // 100美元兑多少人民币
+    const usdBasedRates = {};
     
     for (const [code, cnyRate] of Object.entries(rates)) {
-      if (code !== 'USD') {
-        // 1单位外币 = ? USD
-        // 如果100欧元 = X人民币，1欧元 = X/100人民币
-        // 1欧元 = (X/100) / (USD_CNY/100) = X/USD_CNY USD
-        const cnyPerUnit = cnyRate / 100;
-        usdBasedRates[code] = cnyPerUnit / usdCnyRate;
+      if (code === 'USD') {
+        usdBasedRates[code] = 1.0; // USD对自己是1
+      } else {
+        // 1 USD = ? CODE
+        // (100 USD / usdCnyRate) * (cnyRate / 100) = 目标货币数量
+        // = cnyRate / usdCnyRate
+        usdBasedRates[code] = cnyRate / usdCnyRate;
       }
     }
     
-    // 添加其他常用货币（中国银行没有的，用近似值或API补充）
-    usdBasedRates.CNY = 1 / usdCnyRate; // 1 USD = ? CNY
+    // 人民币
+    usdBasedRates.CNY = usdCnyRate / 100; // 1美元兑多少人民币
     
     return { success: true, rates: usdBasedRates, date: today };
   }
