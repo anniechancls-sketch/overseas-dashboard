@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>海外事业部 · 全球市场决策看板</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Source+Sans+3:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a25;
+            --text-primary: #f0f0f5;
+            --text-secondary: #8a8a9a;
+            --accent-gold: #d4af37;
+            --accent-cyan: #00d4aa;
+            --accent-rose: #ff6b6b;
+            --accent-blue: #4a90d9;
+            --border-subtle: rgba(255,255,255,0.06);
+            --border-highlight: rgba(212,175,55,0.3);
+        }
+        body {
+            font-family: 'Source Sans 3', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        .bg-grid {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-image: linear-gradient(rgba(212,175,55,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(212,175,55,0.03) 1px, transparent 1px);
+            background-size: 60px 60px; pointer-events: none; z-index: 0;
+        }
+        .bg-gradient {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(ellipse at 20% 20%, rgba(74,144,217,0.08) 0%, transparent 50%), radial-gradient(ellipse at 80% 80%, rgba(212,175,55,0.06) 0%, transparent 50%);
+            pointer-events: none; z-index: 0;
+        }
+        .header {
+            position: relative; z-index: 10; padding: 24px 40px;
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid var(--border-subtle);
+            background: linear-gradient(to bottom, var(--bg-secondary), transparent);
+        }
+        .header-left { display: flex; align-items: center; gap: 20px; }
+        .logo {
+            width: 48px; height: 48px; background: linear-gradient(135deg, var(--accent-gold), var(--accent-cyan));
+            border-radius: 12px; display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 24px; color: var(--bg-primary);
+            box-shadow: 0 4px 20px rgba(212,175,55,0.3);
+        }
+        .title-group h1 {
+            font-family: 'Playfair Display', serif; font-size: 28px; font-weight: 600;
+            letter-spacing: -0.5px; margin-bottom: 4px;
+        }
+        .title-group .subtitle { color: var(--text-secondary); font-size: 13px; }
+        .header-right { display: flex; align-items: center; gap: 24px; }
+        .last-update { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
+        .update-indicator {
+            width: 8px; height: 8px; background: var(--accent-cyan);
+            border-radius: 50%; animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.85); } }
+        .refresh-btn {
+            padding: 10px 20px; background: var(--bg-card); border: 1px solid var(--border-subtle);
+            border-radius: 8px; color: var(--text-primary); font-size: 13px; cursor: pointer;
+            transition: all 0.3s ease; display: flex; align-items: center; gap: 8px;
+        }
+        .refresh-btn:hover { background: #222230; border-color: var(--accent-gold); }
+        .main-content {
+            position: relative; z-index: 10; padding: 24px 40px;
+            display: grid; grid-template-columns: repeat(12, 1fr); gap: 20px;
+        }
+        .card {
+            background: var(--bg-card); border: 1px solid var(--border-subtle);
+            border-radius: 16px; padding: 24px; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative; overflow: hidden;
+        }
+        .card:hover { transform: translateY(-4px); box-shadow: 0 0 40px rgba(212,175,55,0.1); border-color: var(--border-highlight); }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .card-title { font-family: 'Playfair Display', serif; font-size: 18px; font-weight: 600; }
+        .card-badge {
+            padding: 4px 12px; background: rgba(0,212,170,0.1); color: var(--accent-cyan);
+            font-size: 11px; font-weight: 500; border-radius: 20px; text-transform: uppercase;
+        }
+        .exchange-section { grid-column: span 8; }
+        .exchange-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
+        .rate-card {
+            background: linear-gradient(145deg, var(--bg-secondary), var(--bg-card));
+            border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px;
+            transition: all 0.3s ease;
+        }
+        .rate-card:hover { border-color: var(--accent-gold); transform: scale(1.02); }
+        .currency-flag { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; margin-bottom: 12px; background: linear-gradient(135deg, var(--accent-gold), var(--accent-cyan)); }
+        .currency-code { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+        .currency-name { font-size: 11px; color: var(--text-secondary); margin-bottom: 8px; }
+        .rate-value { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+        .rate-change { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; }
+        .rate-change.up { color: var(--accent-cyan); }
+        .rate-change.down { color: var(--accent-rose); }
+        .commodities-section { grid-column: span 4; }
+        .commodity-list { display: flex; flex-direction: column; gap: 16px; }
+        .commodity-item {
+            display: flex; align-items: center; gap: 16px; padding: 16px;
+            background: var(--bg-secondary); border-radius: 12px; border: 1px solid var(--border-subtle);
+            transition: all 0.3s ease;
+        }
+        .commodity-item:hover { background: #222230; border-color: var(--border-highlight); }
+        .commodity-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+        .commodity-icon.oil { background: linear-gradient(135deg, #2d3436, #636e72); }
+        .commodity-icon.pvc { background: linear-gradient(135deg, #6c5ce7, #a29bfe); }
+        .commodity-icon.pp { background: linear-gradient(135deg, #00b894, #55efc4); }
+        .commodity-icon.pe { background: linear-gradient(135deg, #0984e3, #74b9ff); }
+        .commodity-icon.copper { background: linear-gradient(135deg, #e17055, #fab1a0); }
+        .commodity-info { flex: 1; }
+        .commodity-name { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+        .commodity-unit { font-size: 11px; color: var(--text-secondary); }
+        .commodity-price { text-align: right; }
+        .price-value { font-size: 18px; font-weight: 700; }
+        .price-change { font-size: 12px; margin-top: 4px; }
+        .price-change.up { color: var(--accent-cyan); }
+        .price-change.down { color: var(--accent-rose); }
+        .shipping-section { grid-column: span 6; }
+        .chart-container { height: 280px; position: relative; }
+        .alert-section { grid-column: span 6; }
+        .alert-list { display: flex; flex-direction: column; gap: 12px; }
+        .alert-item {
+            display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+            background: var(--bg-secondary); border-radius: 10px; border-left: 3px solid;
+            transition: all 0.3s ease;
+        }
+        .alert-item:hover { background: #222230; transform: translateX(4px); }
+        .alert-item.high { border-left-color: var(--accent-rose); }
+        .alert-item.medium { border-left-color: var(--accent-gold); }
+        .alert-item.low { border-left-color: var(--accent-cyan); }
+        .alert-icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+        .alert-item.high .alert-icon { background: rgba(255,107,107,0.1); color: var(--accent-rose); }
+        .alert-item.medium .alert-icon { background: rgba(212,175,55,0.1); color: var(--accent-gold); }
+        .alert-item.low .alert-icon { background: rgba(0,212,170,0.1); color: var(--accent-cyan); }
+        .alert-content { flex: 1; }
+        .alert-title { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+        .alert-desc { font-size: 12px; color: var(--text-secondary); }
+        .alert-time { font-size: 11px; color: #5a5a6a; }
+        .footer {
+            grid-column: span 12; display: flex; justify-content: space-between; align-items: center;
+            padding: 20px 0; margin-top: 20px; border-top: 1px solid var(--border-subtle);
+            color: #5a5a6a; font-size: 12px;
+        }
+        .loading { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border-subtle); border-top-color: var(--accent-gold); border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (max-width: 1400px) {
+            .exchange-grid { grid-template-columns: repeat(3, 1fr); }
+            .exchange-section, .commodities-section, .shipping-section, .alert-section { grid-column: span 12; }
+        }
+        @media (max-width: 768px) {
+            .exchange-grid { grid-template-columns: repeat(2, 1fr); }
+            .header, .main-content { padding: 16px 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-grid"></div>
+    <div class="bg-gradient"></div>
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">RF</div>
+            <div class="title-group">
+                <h1>海外事业部 · 全球市场决策看板</h1>
+                <div class="subtitle">RIFENG Global Business Intelligence Dashboard</div>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="last-update">
+                <div class="update-indicator"></div>
+                <span id="updateTime">加载中...</span>
+            </div>
+            <button class="refresh-btn" onclick="refreshData()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+                刷新数据
+            </button>
+        </div>
+    </header>
+    <main class="main-content">
+        <section class="card exchange-section">
+            <div class="card-header">
+                <h2 class="card-title">💱 实时汇率监控</h2>
+                <span class="card-badge">1 CNY 兑</span>
+            </div>
+            <div class="exchange-grid" id="exchangeGrid"><div class="loading"></div></div>
+        </section>
+        <section class="card commodities-section">
+            <div class="card-header">
+                <h2 class="card-title">📊 原材料价格追踪</h2>
+                <span class="card-badge">Live</span>
+            </div>
+            <div class="commodity-list" id="commodityList"><div class="loading"></div></div>
+        </section>
+        <section class="card shipping-section">
+            <div class="card-header">
+                <h2 class="card-title">🚢 海运费指数趋势</h2>
+                <span class="card-badge">Weekly</span>
+            </div>
+            <div class="chart-container"><canvas id="shippingChart"></canvas></div>
+        </section>
+        <section class="card alert-section">
+            <div class="card-header">
+                <h2 class="card-title">⚠️ 风险预警中心</h2>
+                <span class="card-badge">Alert</span>
+            </div>
+            <div class="alert-list" id="alertList"></div>
+        </section>
+        <footer class="footer">
+            <div>© 2026 RIFENG Group · 日丰企业集团 · 数据仅供内部决策使用</div>
+            <div>部署于 Vercel | 数据实时更新</div>
+        </footer>
+    </main>
+    <script>
+        let shippingChart = null;
+        const alertData = [
+            { level: 'high', icon: '🔴', title: '汇率波动预警', desc: '卢布兑CNY涨幅超1%，影响俄罗斯区域利润', time: '10分钟前' },
+            { level: 'medium', icon: '🟡', title: '海运费上涨', desc: '中国-欧洲航线运费周环比上涨8.5%', time: '1小时前' },
+            { level: 'low', icon: '🟢', title: '原材料价格稳定', desc: 'PVC、PE价格处于近30日低位区间', time: '2小时前' },
+            { level: 'high', icon: '🔴', title: '汇率风险敞口', desc: '美元应收款占比过高，建议锁定汇率', time: '3小时前' }
+        ];
+        
+        async function loadExchangeRates() {
+            try {
+                const res = await fetch('/api/exchange');
+                const data = await res.json();
+                const grid = document.getElementById('exchangeGrid');
+                grid.innerHTML = data.rates.map(item => `
+                    <div class="rate-card">
+                        <div class="currency-flag">${item.code.substring(0,2)}</div>
+                        <div class="currency-code">${item.code}</div>
+                        <div class="currency-name">${item.name}</div>
+                        <div class="rate-value">${item.rate.toFixed(item.rate < 1 ? 4 : 1)}</div>
+                        <div class="rate-change ${item.trend}">
+                            <span>${item.trend === 'up' ? '▲' : '▼'}</span>
+                            <span>${Math.abs(item.change).toFixed(2)}%</span>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) { console.error('Exchange API error:', e); }
+        }
+        
+        async function loadCommodities() {
+            try {
+                const res = await fetch('/api/commodities');
+                const data = await res.json();
+                const list = document.getElementById('commodityList');
+                list.innerHTML = data.commodities.map(item => `
+                    <div class="commodity-item">
+                        <div class="commodity-icon ${item.type}">${item.icon}</div>
+                        <div class="commodity-info">
+                            <div class="commodity-name">${item.name}</div>
+                            <div class="commodity-unit">${item.unit}</div>
+                        </div>
+                        <div class="commodity-price">
+                            <div class="price-value">${item.price.toLocaleString()}</div>
+                            <div class="price-change ${item.trend}">${item.trend === 'up' ? '↑' : '↓'} ${Math.abs(item.change)}%</div>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) { console.error('Commodities API error:', e); }
+        }
+        
+        async function loadShipping() {
+            try {
+                const res = await fetch('/api/shipping');
+                const data = await res.json();
+                const ctx = document.getElementById('shippingChart').getContext('2d');
+                const g1 = ctx.createLinearGradient(0, 0, 0, 300); g1.addColorStop(0, 'rgba(0,212,170,0.3)'); g1.addColorStop(1, 'rgba(0,212,170,0)');
+                const g2 = ctx.createLinearGradient(0, 0, 0, 300); g2.addColorStop(0, 'rgba(212,175,55,0.3)'); g2.addColorStop(1, 'rgba(212,175,55,0)');
+                const g3 = ctx.createLinearGradient(0, 0, 0, 300); g3.addColorStop(0, 'rgba(74,144,217,0.3)'); g3.addColorStop(1, 'rgba(74,144,217,0)');
+                if (shippingChart) shippingChart.destroy();
+                shippingChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.data.labels,
+                        datasets: [
+                            { label: '中国-北美', data: data.data.datasets[0].data, borderColor: '#00d4aa', backgroundColor: g1, borderWidth: 2, fill: true, tension: 0.4 },
+                            { label: '中国-欧洲', data: data.data.datasets[1].data, borderColor: '#d4af37', backgroundColor: g2, borderWidth: 2, fill: true, tension: 0.4 },
+                            { label: '中国-东南亚', data: data.data.datasets[2].data, borderColor: '#4a90d9', backgroundColor: g3, borderWidth: 2, fill: true, tension: 0.4 }
+                        ]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        plugins: { legend: { position: 'top', align: 'end', labels: { color: '#8a8a9a', font: { size: 12 }, usePointStyle: true } } },
+                        scales: {
+                            x: { grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false }, ticks: { color: '#8a8a9a', font: { size: 11 } } },
+                            y: { grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false }, ticks: { color: '#8a8a9a', font: { size: 11 }, callback: v => '$' + v } }
+                        }
+                    }
+                });
+            } catch (e) { console.error('Shipping API error:', e); }
+        }
+        
+        function renderAlerts() {
+            document.getElementById('alertList').innerHTML = alertData.map(item => `
+                <div class="alert-item ${item.level}">
+                    <div class="alert-icon">${item.icon}</div>
+                    <div class="alert-content">
+                        <div class="alert-title">${item.title}</div>
+                        <div class="alert-desc">${item.desc}</div>
+                    </div>
+                    <div class="alert-time">${item.time}</div>
+                </div>
+            `).join('');
+        }
+        
+        async function refreshData() {
+            document.querySelector('.refresh-btn').innerHTML = '<div class="loading" style="width:14px;height:14px;border-width:2px;"></div> 刷新中...';
+            await Promise.all([loadExchangeRates(), loadCommodities(), loadShipping()]);
+            document.getElementById('updateTime').textContent = '更新于 ' + new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            document.querySelector('.refresh-btn').innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> 刷新数据';
+        }
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            renderAlerts();
+            refreshData();
+        });
+        setInterval(refreshData, 300000);
+    </script>
+</body>
+</html>

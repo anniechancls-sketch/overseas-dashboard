@@ -1,0 +1,8 @@
+{
+  "name": "overseas-dashboard",
+  "version": "1.0.0",
+  "description": "海外事业部全球市场决策看板",
+  "dependencies": {
+    "node-fetch": "^2.6.9"
+  }
+}
