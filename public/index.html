@@ -186,7 +186,7 @@
         <section class="card exchange-section">
             <div class="card-header">
                 <h2 class="card-title">💱 实时汇率监控</h2>
-                <span class="card-badge">1 USD 兑</span>
+                <span class="card-badge" id="rateSource">1 USD 兑</span>
             </div>
             <div class="exchange-grid" id="exchangeGrid"><div class="loading"></div></div>
         </section>
@@ -229,6 +229,12 @@
             try {
                 const res = await fetch('/api/exchange');
                 const data = await res.json();
+                
+                // 显示数据来源
+                if (data.source) {
+                    document.getElementById('rateSource').textContent = `1 USD 兑 · ${data.source}`;
+                }
+                
                 const grid = document.getElementById('exchangeGrid');
                 grid.innerHTML = data.rates.map(item => `
                     <div class="rate-card">
