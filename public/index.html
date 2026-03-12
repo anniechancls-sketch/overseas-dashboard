@@ -186,7 +186,7 @@
         <section class="card exchange-section">
             <div class="card-header">
                 <h2 class="card-title">💱 实时汇率监控</h2>
-                <span class="card-badge">1 CNY 兑</span>
+                <span class="card-badge">1 USD 兑</span>
             </div>
             <div class="exchange-grid" id="exchangeGrid"><div class="loading"></div></div>
         </section>
@@ -235,7 +235,7 @@
                         <div class="currency-flag">${item.code.substring(0,2)}</div>
                         <div class="currency-code">${item.code}</div>
                         <div class="currency-name">${item.name}</div>
-                        <div class="rate-value">${item.rate.toFixed(item.rate < 1 ? 4 : 1)}</div>
+                        <div class="rate-value">${item.rate}</div>
                         <div class="rate-change ${item.trend}">
                             <span>${item.trend === 'up' ? '▲' : '▼'}</span>
                             <span>${Math.abs(item.change).toFixed(2)}%</span>
