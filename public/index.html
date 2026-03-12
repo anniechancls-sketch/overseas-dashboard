@@ -235,19 +235,33 @@
                     document.getElementById('rateSource').textContent = `1 USD 兑 · ${data.source}`;
                 }
                 
+                // 确保显示全部10个目标货币，按固定顺序
+                const targetOrder = ['CNY', 'EUR', 'GBP', 'IDR', 'RUB', 'PHP', 'PLN', 'THB', 'MXN', 'VND'];
+                const names = { 
+                    CNY: '人民币', EUR: '欧元', GBP: '英镑', IDR: '印尼盾', RUB: '卢布', 
+                    PHP: '菲律宾比索', PLN: '兹罗提', THB: '泰铢', MXN: '墨西哥比索', VND: '越南盾' 
+                };
+                
+                // 创建code到rate的映射
+                const rateMap = {};
+                data.rates.forEach(r => { rateMap[r.code] = r; });
+                
                 const grid = document.getElementById('exchangeGrid');
-                grid.innerHTML = data.rates.map(item => `
+                grid.innerHTML = targetOrder.map(code => {
+                    const item = rateMap[code];
+                    if (!item) return '';
+                    return `
                     <div class="rate-card">
-                        <div class="currency-flag">${item.code.substring(0,2)}</div>
-                        <div class="currency-code">${item.code}</div>
-                        <div class="currency-name">${item.name}</div>
+                        <div class="currency-flag">${code.substring(0,2)}</div>
+                        <div class="currency-code">${code}</div>
+                        <div class="currency-name">${names[code]}</div>
                         <div class="rate-value">${item.rate}</div>
                         <div class="rate-change ${item.trend}">
                             <span>${item.trend === 'up' ? '▲' : '▼'}</span>
-                            <span>${Math.abs(item.change).toFixed(2)}%</span>
+                            <span>${Math.abs(item.change)}%</span>
                         </div>
                     </div>
-                `).join('');
+                `}).join('');
             } catch (e) { console.error('Exchange API error:', e); }
         }
         

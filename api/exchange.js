@@ -58,7 +58,7 @@ async function fetchBOCRates() {
   
   const today = new Date().toISOString().split('T')[0];
   
-  // 货币映射
+  // 货币映射（包含用户关注的全部币种）
   const currencyMap = {
     '美元': 'USD',
     '欧元': 'EUR', 
@@ -68,7 +68,19 @@ async function fetchBOCRates() {
     '澳大利亚元': 'AUD',
     '加拿大元': 'CAD',
     '新加坡元': 'SGD',
-    '瑞士法郎': 'CHF'
+    '瑞士法郎': 'CHF',
+    '泰国铢': 'THB',
+    '印尼卢比': 'IDR',
+    '卢布': 'RUB',
+    '菲律宾比索': 'PHP',
+    '越南盾': 'VND',
+    '韩国元': 'KRW',
+    '澳门元': 'MOP',
+    '瑞典克朗': 'SEK',
+    '丹麦克朗': 'DKK',
+    '挪威克朗': 'NOK',
+    '新西兰元': 'NZD'
+    // 注：墨西哥比索、兹罗提不在中行主要牌价表中
   };
   
   const rates = {};
@@ -99,14 +111,29 @@ async function fetchBOCRates() {
         usdBasedRates[code] = 1.0; // USD对自己是1
       } else {
         // 1 USD = ? CODE
-        // (100 USD / usdCnyRate) * (cnyRate / 100) = 目标货币数量
-        // = cnyRate / usdCnyRate
         usdBasedRates[code] = cnyRate / usdCnyRate;
       }
     }
     
     // 人民币
     usdBasedRates.CNY = usdCnyRate / 100; // 1美元兑多少人民币
+    
+    // 补充墨西哥比索和兹罗提（从中行获取不到的币种）
+    try {
+      const fallbackRes = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+      const fallbackData = await fallbackRes.json();
+      
+      // 墨西哥比索
+      if (fallbackData.rates.MXN && !usdBasedRates.MXN) {
+        usdBasedRates.MXN = fallbackData.rates.MXN;
+      }
+      // 兹罗提（波兰货币）
+      if (fallbackData.rates.PLN && !usdBasedRates.PLN) {
+        usdBasedRates.PLN = fallbackData.rates.PLN;
+      }
+    } catch (e) {
+      console.log('补充币种获取失败:', e.message);
+    }
     
     return { success: true, rates: usdBasedRates, date: today };
   }
