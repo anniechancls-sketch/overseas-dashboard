@@ -1,11 +1,76 @@
 const fetch = require('node-fetch');
-const { kv } = require('@vercel/kv');
+
+// Redis连接
+let kv = null;
+try {
+  // Vercel Redis 自动注入的环境变量
+  const { createClient } = require('@vercel/kv');
+  
+  // 检查环境变量
+  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+    kv = createClient({
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN,
+    });
+    console.log('Redis连接成功');
+  } else {
+    console.log('Redis环境变量未设置，使用内存模式');
+  }
+} catch (e) {
+  console.log('Redis连接失败:', e.message);
+}
+
+// 内存存储（Redis不可用时）
+const memoryStore = new Map();
+
+// 存储辅助函数
+async function storeData(key, value, ttlSeconds) {
+  try {
+    if (kv) {
+      await kv.set(key, value, { ex: ttlSeconds });
+      console.log(`Redis存储成功: ${key}`);
+    } else {
+      memoryStore.set(key, { value, expires: Date.now() + ttlSeconds * 1000 });
+      console.log(`内存存储: ${key}`);
+    }
+  } catch (e) {
+    console.log(`存储失败 ${key}:`, e.message);
+    // 回退到内存
+    memoryStore.set(key, { value, expires: Date.now() + ttlSeconds * 1000 });
+  }
+}
+
+async function getData(key) {
+  try {
+    if (kv) {
+      const value = await kv.get(key);
+      console.log(`Redis读取: ${key} = ${value}`);
+      return value;
+    } else {
+      const item = memoryStore.get(key);
+      if (item && item.expires > Date.now()) {
+        return item.value;
+      }
+      return null;
+    }
+  } catch (e) {
+    console.log(`读取失败 ${key}:`, e.message);
+    const item = memoryStore.get(key);
+    return item ? item.value : null;
+  }
+}
 
 // 中国银行外汇牌价URL
 const BOC_URL = 'https://www.boc.cn/sourcedb/whpj/';
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  console.log('API调用开始，Redis状态:', kv ? '已连接' : '未连接');
+  console.log('环境变量检查:', {
+    KV_REST_API_URL: process.env.KV_REST_API_URL ? '已设置' : '未设置',
+    KV_REST_API_TOKEN: process.env.KV_REST_API_TOKEN ? '已设置' : '未设置'
+  });
   
   try {
     console.log('尝试抓取中国银行外汇牌价...');
@@ -91,43 +156,38 @@ async function fetchBOCRates() {
     const match = html.match(pattern);
     
     if (match && match[4]) {
-      // 中行折算价（100外币兑人民币）
       const zhonghangRate = parseFloat(match[4]);
       if (!isNaN(zhonghangRate) && zhonghangRate > 0) {
-        // 100外币 = X人民币，所以 1外币 = X/100人民币
-        // 要算 1 USD = ? 外币，需要先知道 USD/CNY 汇率
         rates[code] = zhonghangRate;
       }
     }
   }
   
+  console.log('抓取到的币种:', Object.keys(rates));
+  
   // 转换为以USD为基准的汇率
   if (rates.USD) {
-    const usdCnyRate = rates.USD; // 100美元兑多少人民币
+    const usdCnyRate = rates.USD;
     const usdBasedRates = {};
     
     for (const [code, cnyRate] of Object.entries(rates)) {
       if (code === 'USD') {
-        usdBasedRates[code] = 1.0; // USD对自己是1
+        usdBasedRates[code] = 1.0;
       } else {
-        // 1 USD = ? CODE
         usdBasedRates[code] = cnyRate / usdCnyRate;
       }
     }
     
-    // 人民币
-    usdBasedRates.CNY = usdCnyRate / 100; // 1美元兑多少人民币
+    usdBasedRates.CNY = usdCnyRate / 100;
     
-    // 补充墨西哥比索和兹罗提（从中行获取不到的币种）
+    // 补充墨西哥比索和兹罗提
     try {
       const fallbackRes = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
       const fallbackData = await fallbackRes.json();
       
-      // 墨西哥比索
       if (fallbackData.rates.MXN && !usdBasedRates.MXN) {
         usdBasedRates.MXN = fallbackData.rates.MXN;
       }
-      // 兹罗提（波兰货币）
       if (fallbackData.rates.PLN && !usdBasedRates.PLN) {
         usdBasedRates.PLN = fallbackData.rates.PLN;
       }
@@ -177,25 +237,20 @@ async function processAndStoreRates(rates, source) {
     let change = 0;
     let trend = 'up';
     
-    try {
-      const yesterdayKey = `RATE:${code}:${getYesterday()}`;
-      const yesterdayRate = await kv.get(yesterdayKey);
-      if (yesterdayRate) {
-        change = ((rate - yesterdayRate) / yesterdayRate) * 100;
-        trend = change >= 0 ? 'up' : 'down';
-      } else {
-        change = (Math.random() - 0.5) * 1;
-        trend = change >= 0 ? 'up' : 'down';
-      }
-    } catch (e) {
+    const yesterdayKey = `RATE:${code}:${getYesterday()}`;
+    const yesterdayRate = await getData(yesterdayKey);
+    
+    if (yesterdayRate) {
+      change = ((rate - yesterdayRate) / yesterdayRate) * 100;
+      trend = change >= 0 ? 'up' : 'down';
+    } else {
       change = (Math.random() - 0.5) * 1;
       trend = change >= 0 ? 'up' : 'down';
     }
     
-    // 存储
-    try {
-      await kv.set(`RATE:${code}:${today}`, rate, { ex: 60 * 60 * 24 * 90 });
-    } catch (e) {}
+    // 存储到Redis
+    const todayKey = `RATE:${code}:${today}`;
+    await storeData(todayKey, rate, 60 * 60 * 24 * 90); // 90天过期
     
     result.push({
       code,
@@ -206,13 +261,13 @@ async function processAndStoreRates(rates, source) {
     });
   }
   
-  // 存储今日完整汇率集
-  try {
-    const ratesObj = {};
-    targets.forEach(code => { if (rates[code]) ratesObj[code] = rates[code]; });
-    await kv.set(`RATES:${today}`, JSON.stringify(ratesObj), { ex: 60 * 60 * 24 * 90 });
-    await kv.set(`SOURCE:${today}`, source, { ex: 60 * 60 * 24 * 90 });
-  } catch (e) {}
+  // 存储今日完整汇率集和数据源
+  const ratesObj = {};
+  targets.forEach(code => { if (rates[code]) ratesObj[code] = rates[code]; });
+  await storeData(`RATES:${today}`, JSON.stringify(ratesObj), 60 * 60 * 24 * 90);
+  await storeData(`SOURCE:${today}`, source, 60 * 60 * 24 * 90);
+  
+  console.log(`存储完成，共${result.length}个币种，数据源: ${source}`);
   
   return result;
 }
