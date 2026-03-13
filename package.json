@@ -1,8 +1,9 @@
 {
   "name": "overseas-dashboard",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "海外事业部全球市场决策看板 - USD主货币 - GitHub存储",
   "dependencies": {
-    "node-fetch": "^2.6.9"
+    "node-fetch": "^2.6.9",
+    "cheerio": "^1.0.0-rc.12"
   }
 }
