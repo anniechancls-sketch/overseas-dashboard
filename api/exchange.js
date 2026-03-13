@@ -3,14 +3,27 @@ const fetch = require('node-fetch');
 // Redis连接
 let kv = null;
 try {
-  // Vercel Redis 自动注入的环境变量
   const { createClient } = require('@vercel/kv');
   
-  // 检查环境变量
-  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+  // Vercel KV 环境变量
+  let redisUrl = process.env.KV_REST_API_URL;
+  let redisToken = process.env.KV_REST_API_TOKEN;
+  
+  // 如果没有 KV 变量，尝试 REDIS_URL (Vercel Upstash Redis)
+  if (!redisUrl && process.env.REDIS_URL) {
+    // REDIS_URL 格式: redis://default:TOKEN@HOST:PORT
+    const redisUrlMatch = process.env.REDIS_URL.match(/redis:\/\/default:([^@]+)@(.+)/);
+    if (redisUrlMatch) {
+      redisToken = redisUrlMatch[1];
+      const hostPort = redisUrlMatch[2];
+      redisUrl = `https://${hostPort}`;
+    }
+  }
+  
+  if (redisUrl && redisToken) {
     kv = createClient({
-      url: process.env.KV_REST_API_URL,
-      token: process.env.KV_REST_API_TOKEN,
+      url: redisUrl,
+      token: redisToken,
     });
     console.log('Redis连接成功');
   } else {
