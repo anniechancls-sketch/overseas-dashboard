@@ -3,15 +3,41 @@ const Redis = require('ioredis');
 
 // Redis连接
 let redis = null;
-try {
-  if (process.env.REDIS_URL) {
-    redis = new Redis(process.env.REDIS_URL);
-    console.log('Redis连接成功');
-  } else {
-    console.log('REDIS_URL未设置，使用内存模式');
+let redisConnected = false;
+
+async function initRedis() {
+  try {
+    if (process.env.REDIS_URL) {
+      redis = new Redis(process.env.REDIS_URL, {
+        connectTimeout: 5000,
+        commandTimeout: 5000,
+        retryStrategy: (times) => {
+          if (times > 3) return null;
+          return Math.min(times * 100, 1000);
+        }
+      });
+      
+      // 等待连接成功
+      await new Promise((resolve, reject) => {
+        redis.once('connect', () => {
+          console.log('Redis连接成功');
+          redisConnected = true;
+          resolve();
+        });
+        redis.once('error', (err) => {
+          console.log('Redis连接错误:', err.message);
+          reject(err);
+        });
+        // 3秒超时
+        setTimeout(() => reject(new Error('Redis连接超时')), 3000);
+      });
+    } else {
+      console.log('REDIS_URL未设置，使用内存模式');
+    }
+  } catch (e) {
+    console.log('Redis初始化失败:', e.message);
+    redis = null;
   }
-} catch (e) {
-  console.log('Redis连接失败:', e.message);
 }
 
 // 内存存储（Redis不可用时）
@@ -20,24 +46,25 @@ const memoryStore = new Map();
 // 存储辅助函数
 async function storeData(key, value, ttlSeconds) {
   try {
-    if (redis) {
-      await redis.setex(key, ttlSeconds, typeof value === 'string' ? value : JSON.stringify(value));
-      console.log(`Redis存储成功: ${key}`);
+    if (redis && redisConnected) {
+      const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
+      await redis.setex(key, ttlSeconds, stringValue);
+      console.log(`✓ Redis存储成功: ${key}`);
     } else {
       memoryStore.set(key, { value, expires: Date.now() + ttlSeconds * 1000 });
-      console.log(`内存存储: ${key}`);
+      console.log(`○ 内存存储: ${key}`);
     }
   } catch (e) {
-    console.log(`存储失败 ${key}:`, e.message);
+    console.log(`✗ 存储失败 ${key}:`, e.message);
     memoryStore.set(key, { value, expires: Date.now() + ttlSeconds * 1000 });
   }
 }
 
 async function getData(key) {
   try {
-    if (redis) {
+    if (redis && redisConnected) {
       const value = await redis.get(key);
-      console.log(`Redis读取: ${key} = ${value ? '有数据' : '无数据'}`);
+      console.log(`Redis读取: ${key} = ${value ? value.substring(0, 50) : '无数据'}`);
       if (!value) return null;
       // 尝试解析JSON
       try {
@@ -67,7 +94,12 @@ const BOC_URL = 'https://www.boc.cn/sourcedb/whpj/';
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   
-  console.log('API调用开始，Redis状态:', redis ? '已连接' : '未连接');
+  // 初始化Redis连接
+  if (!redisConnected) {
+    await initRedis();
+  }
+  
+  console.log('API调用开始，Redis状态:', redisConnected ? '已连接' : '未连接');
   
   try {
     console.log('尝试抓取中国银行外汇牌价...');
@@ -144,18 +176,23 @@ async function fetchBOCRates() {
   console.log('抓取到的币种:', Object.keys(rates));
   
   // 转换为以USD为基准的汇率
+  // 中行牌价: 100外币 = X人民币
+  // 计算: 1 USD = ? 外币
   if (rates.USD) {
-    const usdCnyRate = rates.USD;
+    const usdCnyRate = rates.USD; // 100美元兑多少人民币
     const usdBasedRates = {};
     
     for (const [code, cnyRate] of Object.entries(rates)) {
       if (code === 'USD') {
-        usdBasedRates[code] = 1.0;
+        usdBasedRates[code] = 1.0; // 1 USD = 1 USD
       } else {
-        usdBasedRates[code] = cnyRate / usdCnyRate;
+        // 1 USD = (100 / cnyRate) / (100 / usdCnyRate) = usdCnyRate / cnyRate 外币
+        // 例如: 1 USD = 723.45/782.34 = 0.925 EUR
+        usdBasedRates[code] = usdCnyRate / cnyRate;
       }
     }
     
+    // 人民币: 1 USD = 多少人民币
     usdBasedRates.CNY = usdCnyRate / 100;
     
     // 补充其他币种
