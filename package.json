@@ -4,6 +4,6 @@
   "description": "海外事业部全球市场决策看板 - USD主货币",
   "dependencies": {
     "node-fetch": "^2.6.9",
-    "@vercel/kv": "^0.2.3"
+    "ioredis": "^5.3.2"
   }
 }

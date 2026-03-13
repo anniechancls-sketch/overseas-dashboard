@@ -1,33 +1,14 @@
 const fetch = require('node-fetch');
+const Redis = require('ioredis');
 
 // Redis连接
-let kv = null;
+let redis = null;
 try {
-  const { createClient } = require('@vercel/kv');
-  
-  // Vercel KV 环境变量
-  let redisUrl = process.env.KV_REST_API_URL;
-  let redisToken = process.env.KV_REST_API_TOKEN;
-  
-  // 如果没有 KV 变量，尝试 REDIS_URL (Vercel Upstash Redis)
-  if (!redisUrl && process.env.REDIS_URL) {
-    // REDIS_URL 格式: redis://default:TOKEN@HOST:PORT
-    const redisUrlMatch = process.env.REDIS_URL.match(/redis:\/\/default:([^@]+)@(.+)/);
-    if (redisUrlMatch) {
-      redisToken = redisUrlMatch[1];
-      const hostPort = redisUrlMatch[2];
-      redisUrl = `https://${hostPort}`;
-    }
-  }
-  
-  if (redisUrl && redisToken) {
-    kv = createClient({
-      url: redisUrl,
-      token: redisToken,
-    });
+  if (process.env.REDIS_URL) {
+    redis = new Redis(process.env.REDIS_URL);
     console.log('Redis连接成功');
   } else {
-    console.log('Redis环境变量未设置，使用内存模式');
+    console.log('REDIS_URL未设置，使用内存模式');
   }
 } catch (e) {
   console.log('Redis连接失败:', e.message);
@@ -39,8 +20,8 @@ const memoryStore = new Map();
 // 存储辅助函数
 async function storeData(key, value, ttlSeconds) {
   try {
-    if (kv) {
-      await kv.set(key, value, { ex: ttlSeconds });
+    if (redis) {
+      await redis.setex(key, ttlSeconds, typeof value === 'string' ? value : JSON.stringify(value));
       console.log(`Redis存储成功: ${key}`);
     } else {
       memoryStore.set(key, { value, expires: Date.now() + ttlSeconds * 1000 });
@@ -48,17 +29,24 @@ async function storeData(key, value, ttlSeconds) {
     }
   } catch (e) {
     console.log(`存储失败 ${key}:`, e.message);
-    // 回退到内存
     memoryStore.set(key, { value, expires: Date.now() + ttlSeconds * 1000 });
   }
 }
 
 async function getData(key) {
   try {
-    if (kv) {
-      const value = await kv.get(key);
-      console.log(`Redis读取: ${key} = ${value}`);
-      return value;
+    if (redis) {
+      const value = await redis.get(key);
+      console.log(`Redis读取: ${key} = ${value ? '有数据' : '无数据'}`);
+      if (!value) return null;
+      // 尝试解析JSON
+      try {
+        return JSON.parse(value);
+      } catch {
+        // 如果不是JSON，返回原始值转为数字
+        const num = parseFloat(value);
+        return isNaN(num) ? value : num;
+      }
     } else {
       const item = memoryStore.get(key);
       if (item && item.expires > Date.now()) {
@@ -79,11 +67,7 @@ const BOC_URL = 'https://www.boc.cn/sourcedb/whpj/';
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   
-  console.log('API调用开始，Redis状态:', kv ? '已连接' : '未连接');
-  console.log('环境变量检查:', {
-    KV_REST_API_URL: process.env.KV_REST_API_URL ? '已设置' : '未设置',
-    KV_REST_API_TOKEN: process.env.KV_REST_API_TOKEN ? '已设置' : '未设置'
-  });
+  console.log('API调用开始，Redis状态:', redis ? '已连接' : '未连接');
   
   try {
     console.log('尝试抓取中国银行外汇牌价...');
@@ -136,34 +120,15 @@ async function fetchBOCRates() {
   
   const today = new Date().toISOString().split('T')[0];
   
-  // 货币映射（包含用户关注的全部币种）
+  // 货币映射
   const currencyMap = {
-    '美元': 'USD',
-    '欧元': 'EUR', 
-    '英镑': 'GBP',
-    '日元': 'JPY',
-    '港币': 'HKD',
-    '澳大利亚元': 'AUD',
-    '加拿大元': 'CAD',
-    '新加坡元': 'SGD',
-    '瑞士法郎': 'CHF',
-    '泰国铢': 'THB',
-    '印尼卢比': 'IDR',
-    '卢布': 'RUB',
-    '菲律宾比索': 'PHP',
-    '越南盾': 'VND',
-    '韩国元': 'KRW',
-    '澳门元': 'MOP',
-    '瑞典克朗': 'SEK',
-    '丹麦克朗': 'DKK',
-    '挪威克朗': 'NOK',
-    '新西兰元': 'NZD'
-    // 注：墨西哥比索、兹罗提不在中行主要牌价表中
+    '美元': 'USD', '欧元': 'EUR', '英镑': 'GBP',
+    '泰国铢': 'THB', '印尼卢比': 'IDR', '卢布': 'RUB',
+    '菲律宾比索': 'PHP', '越南盾': 'VND'
   };
   
   const rates = {};
   
-  // 提取牌价（现汇买入价 现钞买入价 现汇卖出价 中行折算价）
   for (const [cnName, code] of Object.entries(currencyMap)) {
     const pattern = new RegExp(`${cnName}[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>`);
     const match = html.match(pattern);
@@ -193,20 +158,16 @@ async function fetchBOCRates() {
     
     usdBasedRates.CNY = usdCnyRate / 100;
     
-    // 补充墨西哥比索和兹罗提
+    // 补充其他币种
     try {
       const fallbackRes = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
       const fallbackData = await fallbackRes.json();
-      
-      if (fallbackData.rates.MXN && !usdBasedRates.MXN) {
-        usdBasedRates.MXN = fallbackData.rates.MXN;
-      }
-      if (fallbackData.rates.PLN && !usdBasedRates.PLN) {
-        usdBasedRates.PLN = fallbackData.rates.PLN;
-      }
-    } catch (e) {
-      console.log('补充币种获取失败:', e.message);
-    }
+      ['MXN', 'PLN'].forEach(code => {
+        if (fallbackData.rates[code] && !usdBasedRates[code]) {
+          usdBasedRates[code] = fallbackData.rates[code];
+        }
+      });
+    } catch (e) {}
     
     return { success: true, rates: usdBasedRates, date: today };
   }
@@ -261,9 +222,9 @@ async function processAndStoreRates(rates, source) {
       trend = change >= 0 ? 'up' : 'down';
     }
     
-    // 存储到Redis
+    // 存储到Redis (2小时刷新，数据保留90天)
     const todayKey = `RATE:${code}:${today}`;
-    await storeData(todayKey, rate, 60 * 60 * 24 * 90); // 90天过期
+    await storeData(todayKey, rate, 60 * 60 * 24 * 90);
     
     result.push({
       code,
@@ -274,13 +235,14 @@ async function processAndStoreRates(rates, source) {
     });
   }
   
-  // 存储今日完整汇率集和数据源
+  // 存储完整数据
   const ratesObj = {};
   targets.forEach(code => { if (rates[code]) ratesObj[code] = rates[code]; });
   await storeData(`RATES:${today}`, JSON.stringify(ratesObj), 60 * 60 * 24 * 90);
   await storeData(`SOURCE:${today}`, source, 60 * 60 * 24 * 90);
+  await storeData('LAST_UPDATE', new Date().toISOString(), 60 * 60 * 24 * 90);
   
-  console.log(`存储完成，共${result.length}个币种，数据源: ${source}`);
+  console.log(`存储完成，共${result.length}个币种`);
   
   return result;
 }
