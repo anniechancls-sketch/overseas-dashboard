@@ -1,10 +1,9 @@
 const fetch = require('node-fetch');
 
-// 版本: 2026-03-13 - GitHub存储版本
 // GitHub配置
 const GITHUB_OWNER = 'anniechancls-sketch';
 const GITHUB_REPO = 'overseas-dashboard';
-const DATA_BRANCH = 'data'; // 使用独立分支，避免触发Vercel部署
+const DATA_BRANCH = 'main';
 
 // GitHub API Token
 function getGitHubToken() {
@@ -21,7 +20,7 @@ async function pushToGitHub(filename, content, message) {
   }
   
   try {
-    // 尝试推送到根目录（避免data目录不存在问题）
+    // 推送到rates目录
     const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/rates/${filename}`;
     console.log('推送URL:', apiUrl);
     
@@ -64,7 +63,7 @@ async function pushToGitHub(filename, content, message) {
     return { success: false, error: `${res.status}: ${error}` };
   } catch (e) {
     console.log('GitHub推送错误:', e.message);
-    return false;
+    return { success: false, error: e.message };
   }
 }
 
@@ -105,9 +104,7 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const today = new Date().toISOString().split('T')[0];
   
-  if (!getGitHubToken()) {
-    console.log('未设置GITHUB_TOKEN');
-  }
+  console.log('Token检查:', !!getGitHubToken());
   
   try {
     const bocData = await fetchBOCRates();
@@ -115,8 +112,8 @@ module.exports = async (req, res) => {
       const processed = await processRates(bocData.rates, today);
       const pushResult = await pushRatesToGitHub(bocData.rates, '中国银行', today);
       return res.json({ 
-        success: true, source: '中国银行', date: today, rates: processed,
-        github: pushResult?.success ? '已推送' : `失败: ${pushResult?.error || '检查Token权限'}`
+        success: true, source: '中国银行', base: 'USD', date: today, rates: processed,
+        github: pushResult?.success ? '已推送' : `失败: ${pushResult?.error || '检查Token'}`
       });
     }
   } catch (e) {}
@@ -126,8 +123,8 @@ module.exports = async (req, res) => {
     const processed = await processRates(fallback.rates, today);
     const pushResult = await pushRatesToGitHub(fallback.rates, 'exchangerate', today);
     return res.json({ 
-      success: true, source: 'exchangerate (备用)', date: today, rates: processed,
-      github: pushResult?.success ? '已推送' : `失败: ${pushResult?.error || '检查Token权限'}`
+      success: true, source: 'exchangerate (备用)', base: 'USD', date: today, rates: processed,
+      github: pushResult?.success ? '已推送' : `失败: ${pushResult?.error || '检查Token'}`
     });
   } catch (e) {
     return res.status(500).json({ error: '失败' });
@@ -221,10 +218,4 @@ async function processRates(rates, date) {
   }
   
   return result;
-}
-
-function getYesterday() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().split('T')[0];
 }
