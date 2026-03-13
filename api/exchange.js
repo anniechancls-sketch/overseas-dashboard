@@ -1,5 +1,6 @@
 const fetch = require('node-fetch');
 
+// 版本: 2026-03-13 - GitHub存储版本
 // GitHub配置
 const GITHUB_OWNER = 'anniechancls-sketch';
 const GITHUB_REPO = 'overseas-dashboard';
