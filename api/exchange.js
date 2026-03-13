@@ -1,90 +1,82 @@
 const fetch = require('node-fetch');
-const Redis = require('ioredis');
+const fs = require('fs').promises;
+const path = require('path');
 
-// Redis连接
-let redis = null;
-let redisConnected = false;
+// 数据目录
+const DATA_DIR = '/tmp/overseas-data';
 
-async function initRedis() {
+// 内存存储（文件不可用时）
+const memoryStore = new Map();
+
+// 确保数据目录存在
+async function ensureDir() {
   try {
-    if (process.env.REDIS_URL) {
-      redis = new Redis(process.env.REDIS_URL, {
-        connectTimeout: 5000,
-        commandTimeout: 5000,
-        retryStrategy: (times) => {
-          if (times > 3) return null;
-          return Math.min(times * 100, 1000);
-        }
-      });
-      
-      // 等待连接成功
-      await new Promise((resolve, reject) => {
-        redis.once('connect', () => {
-          console.log('Redis连接成功');
-          redisConnected = true;
-          resolve();
-        });
-        redis.once('error', (err) => {
-          console.log('Redis连接错误:', err.message);
-          reject(err);
-        });
-        // 3秒超时
-        setTimeout(() => reject(new Error('Redis连接超时')), 3000);
-      });
-    } else {
-      console.log('REDIS_URL未设置，使用内存模式');
-    }
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    return true;
   } catch (e) {
-    console.log('Redis初始化失败:', e.message);
-    redis = null;
+    console.log('创建目录失败:', e.message);
+    return false;
   }
 }
-
-// 内存存储（Redis不可用时）
-const memoryStore = new Map();
 
 // 存储辅助函数
 async function storeData(key, value, ttlSeconds) {
+  const filePath = path.join(DATA_DIR, `${key.replace(/:/g, '_')}.json`);
+  const data = {
+    value: value,
+    expires: Date.now() + ttlSeconds * 1000,
+    created: new Date().toISOString()
+  };
+  
   try {
-    if (redis && redisConnected) {
-      const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-      await redis.setex(key, ttlSeconds, stringValue);
-      console.log(`✓ Redis存储成功: ${key}`);
+    const dirExists = await ensureDir();
+    if (dirExists) {
+      await fs.writeFile(filePath, JSON.stringify(data), 'utf8');
+      console.log(`文件存储成功: ${key}`);
     } else {
-      memoryStore.set(key, { value, expires: Date.now() + ttlSeconds * 1000 });
-      console.log(`○ 内存存储: ${key}`);
+      memoryStore.set(key, data);
+      console.log(`内存存储: ${key}`);
     }
   } catch (e) {
-    console.log(`✗ 存储失败 ${key}:`, e.message);
-    memoryStore.set(key, { value, expires: Date.now() + ttlSeconds * 1000 });
+    console.log(`存储失败 ${key}:`, e.message);
+    memoryStore.set(key, data);
   }
 }
 
+// 读取辅助函数
 async function getData(key) {
+  const filePath = path.join(DATA_DIR, `${key.replace(/:/g, '_')}.json`);
+  
   try {
-    if (redis && redisConnected) {
-      const value = await redis.get(key);
-      console.log(`Redis读取: ${key} = ${value ? value.substring(0, 50) : '无数据'}`);
-      if (!value) return null;
-      // 尝试解析JSON
-      try {
-        return JSON.parse(value);
-      } catch {
-        // 如果不是JSON，返回原始值转为数字
-        const num = parseFloat(value);
-        return isNaN(num) ? value : num;
-      }
-    } else {
-      const item = memoryStore.get(key);
-      if (item && item.expires > Date.now()) {
-        return item.value;
-      }
+    // 先尝试读取文件
+    const content = await fs.readFile(filePath, 'utf8');
+    const data = JSON.parse(content);
+    
+    // 检查是否过期
+    if (data.expires && data.expires < Date.now()) {
+      console.log(`文件已过期: ${key}`);
       return null;
     }
+    
+    console.log(`文件读取: ${key}`);
+    // 返回原始值
+    if (typeof data.value === 'string') {
+      // 尝试解析为数字
+      const num = parseFloat(data.value);
+      return isNaN(num) ? data.value : num;
+    }
+    return data.value;
   } catch (e) {
-    console.log(`读取失败 ${key}:`, e.message);
-    const item = memoryStore.get(key);
-    return item ? item.value : null;
+    // 文件不存在或读取失败，尝试内存
+    const memData = memoryStore.get(key);
+    if (memData) {
+      if (memData.expires && memData.expires < Date.now()) {
+        memoryStore.delete(key);
+        return null;
+      }
+      return memData.value;
+    }
+    return null;
   }
 }
 
@@ -94,12 +86,7 @@ const BOC_URL = 'https://www.boc.cn/sourcedb/whpj/';
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   
-  // 初始化Redis连接
-  if (!redisConnected) {
-    await initRedis();
-  }
-  
-  console.log('API调用开始，Redis状态:', redisConnected ? '已连接' : '未连接');
+  console.log('API调用开始，使用文件存储模式');
   
   try {
     console.log('尝试抓取中国银行外汇牌价...');
@@ -176,23 +163,18 @@ async function fetchBOCRates() {
   console.log('抓取到的币种:', Object.keys(rates));
   
   // 转换为以USD为基准的汇率
-  // 中行牌价: 100外币 = X人民币
-  // 计算: 1 USD = ? 外币
   if (rates.USD) {
-    const usdCnyRate = rates.USD; // 100美元兑多少人民币
+    const usdCnyRate = rates.USD;
     const usdBasedRates = {};
     
     for (const [code, cnyRate] of Object.entries(rates)) {
       if (code === 'USD') {
-        usdBasedRates[code] = 1.0; // 1 USD = 1 USD
+        usdBasedRates[code] = 1.0;
       } else {
-        // 1 USD = (100 / cnyRate) / (100 / usdCnyRate) = usdCnyRate / cnyRate 外币
-        // 例如: 1 USD = 723.45/782.34 = 0.925 EUR
         usdBasedRates[code] = usdCnyRate / cnyRate;
       }
     }
     
-    // 人民币: 1 USD = 多少人民币
     usdBasedRates.CNY = usdCnyRate / 100;
     
     // 补充其他币种
@@ -259,9 +241,9 @@ async function processAndStoreRates(rates, source) {
       trend = change >= 0 ? 'up' : 'down';
     }
     
-    // 存储到Redis (2小时刷新，数据保留90天)
+    // 存储到文件
     const todayKey = `RATE:${code}:${today}`;
-    await storeData(todayKey, rate, 60 * 60 * 24 * 90);
+    await storeData(todayKey, String(rate), 60 * 60 * 24 * 90);
     
     result.push({
       code,
