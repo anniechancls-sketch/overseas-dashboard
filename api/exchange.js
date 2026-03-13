@@ -14,13 +14,16 @@ function getGitHubToken() {
 // 推送到GitHub
 async function pushToGitHub(filename, content, message) {
   const token = getGitHubToken();
+  console.log('Token存在:', !!token);
   if (!token) {
     console.log('未设置GITHUB_TOKEN');
-    return false;
+    return { success: false, error: 'NO_TOKEN' };
   }
   
   try {
-    const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/data/${filename}`;
+    // 尝试推送到根目录（避免data目录不存在问题）
+    const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/rates/${filename}`;
+    console.log('推送URL:', apiUrl);
     
     // 检查文件是否存在
     let sha = null;
@@ -54,11 +57,11 @@ async function pushToGitHub(filename, content, message) {
     
     if (res.status === 200 || res.status === 201) {
       console.log(`GitHub推送成功: ${filename}`);
-      return true;
+      return { success: true };
     }
     const error = await res.text();
     console.log(`GitHub推送失败: ${res.status} - ${error}`);
-    return false;
+    return { success: false, error: `${res.status}: ${error}` };
   } catch (e) {
     console.log('GitHub推送错误:', e.message);
     return false;
@@ -78,7 +81,7 @@ async function getData(key) {
 
 // 推送到GitHub的函数
 async function pushRatesToGitHub(rates, source, date) {
-  if (!getGitHubToken()) return;
+  if (!getGitHubToken()) return { success: false, error: 'NO_TOKEN' };
   
   const targets = ['CNY', 'EUR', 'GBP', 'IDR', 'RUB', 'PHP', 'PLN', 'THB', 'MXN', 'VND'];
   const ratesObj = {};
@@ -92,7 +95,7 @@ async function pushRatesToGitHub(rates, source, date) {
     updatedAt: new Date().toISOString()
   };
   
-  await pushToGitHub(`${date}.json`, JSON.stringify(data, null, 2), `汇率数据: ${date} (${source})`);
+  return await pushToGitHub(`${date}.json`, JSON.stringify(data, null, 2), `汇率数据: ${date} (${source})`);
 }
 
 // 中国银行外汇牌价
@@ -110,10 +113,10 @@ module.exports = async (req, res) => {
     const bocData = await fetchBOCRates();
     if (bocData.success) {
       const processed = await processRates(bocData.rates, today);
-      await pushRatesToGitHub(bocData.rates, '中国银行', today);
+      const pushResult = await pushRatesToGitHub(bocData.rates, '中国银行', today);
       return res.json({ 
         success: true, source: '中国银行', date: today, rates: processed,
-        github: getGitHubToken() ? '已推送' : '未配置'
+        github: pushResult?.success ? '已推送' : `失败: ${pushResult?.error || '检查Token权限'}`
       });
     }
   } catch (e) {}
@@ -121,10 +124,10 @@ module.exports = async (req, res) => {
   try {
     const fallback = await fetchFallbackRates();
     const processed = await processRates(fallback.rates, today);
-    await pushRatesToGitHub(fallback.rates, 'exchangerate', today);
+    const pushResult = await pushRatesToGitHub(fallback.rates, 'exchangerate', today);
     return res.json({ 
       success: true, source: 'exchangerate (备用)', date: today, rates: processed,
-      github: getGitHubToken() ? '已推送' : '未配置'
+      github: pushResult?.success ? '已推送' : `失败: ${pushResult?.error || '检查Token权限'}`
     });
   } catch (e) {
     return res.status(500).json({ error: '失败' });
