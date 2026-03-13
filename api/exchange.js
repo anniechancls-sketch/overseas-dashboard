@@ -1,267 +1,220 @@
 const fetch = require('node-fetch');
-const fs = require('fs').promises;
-const path = require('path');
 
-// 数据目录
-const DATA_DIR = '/tmp/overseas-data';
+// GitHub配置
+const GITHUB_OWNER = 'anniechancls-sketch';
+const GITHUB_REPO = 'overseas-dashboard';
+const DATA_BRANCH = 'main';
 
-// 内存存储（文件不可用时）
-const memoryStore = new Map();
+// GitHub API Token
+function getGitHubToken() {
+  return process.env.GITHUB_TOKEN;
+}
 
-// 确保数据目录存在
-async function ensureDir() {
+// 推送到GitHub
+async function pushToGitHub(filename, content, message) {
+  const token = getGitHubToken();
+  if (!token) {
+    console.log('未设置GITHUB_TOKEN');
+    return false;
+  }
+  
   try {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    return true;
+    const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/data/${filename}`;
+    
+    // 检查文件是否存在
+    let sha = null;
+    try {
+      const checkRes = await fetch(apiUrl, {
+        headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+      });
+      if (checkRes.status === 200) {
+        const checkData = await checkRes.json();
+        sha = checkData.sha;
+      }
+    } catch (e) {}
+    
+    // 创建或更新
+    const body = {
+      message: message,
+      content: Buffer.from(content).toString('base64'),
+      branch: DATA_BRANCH
+    };
+    if (sha) body.sha = sha;
+    
+    const res = await fetch(apiUrl, {
+      method: 'PUT',
+      headers: { 
+        'Authorization': `token ${token}`, 
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+    
+    if (res.status === 200 || res.status === 201) {
+      console.log(`GitHub推送成功: ${filename}`);
+      return true;
+    }
+    const error = await res.text();
+    console.log(`GitHub推送失败: ${res.status} - ${error}`);
+    return false;
   } catch (e) {
-    console.log('创建目录失败:', e.message);
+    console.log('GitHub推送错误:', e.message);
     return false;
   }
 }
 
-// 存储辅助函数
-async function storeData(key, value, ttlSeconds) {
-  const filePath = path.join(DATA_DIR, `${key.replace(/:/g, '_')}.json`);
+// 内存存储
+const memoryStore = new Map();
+
+async function storeData(key, value) {
+  memoryStore.set(key, value);
+}
+
+async function getData(key) {
+  return memoryStore.get(key) || null;
+}
+
+// 推送到GitHub的函数
+async function pushRatesToGitHub(rates, source, date) {
+  if (!getGitHubToken()) return;
+  
+  const targets = ['CNY', 'EUR', 'GBP', 'IDR', 'RUB', 'PHP', 'PLN', 'THB', 'MXN', 'VND'];
+  const ratesObj = {};
+  targets.forEach(code => { if (rates[code]) ratesObj[code] = rates[code]; });
+  
   const data = {
-    value: value,
-    expires: Date.now() + ttlSeconds * 1000,
-    created: new Date().toISOString()
+    date: date,
+    source: source,
+    base: 'USD',
+    rates: ratesObj,
+    updatedAt: new Date().toISOString()
   };
   
-  try {
-    const dirExists = await ensureDir();
-    if (dirExists) {
-      await fs.writeFile(filePath, JSON.stringify(data), 'utf8');
-      console.log(`文件存储成功: ${key}`);
-    } else {
-      memoryStore.set(key, data);
-      console.log(`内存存储: ${key}`);
-    }
-  } catch (e) {
-    console.log(`存储失败 ${key}:`, e.message);
-    memoryStore.set(key, data);
-  }
+  await pushToGitHub(`${date}.json`, JSON.stringify(data, null, 2), `汇率数据: ${date} (${source})`);
 }
 
-// 读取辅助函数
-async function getData(key) {
-  const filePath = path.join(DATA_DIR, `${key.replace(/:/g, '_')}.json`);
-  
-  try {
-    // 先尝试读取文件
-    const content = await fs.readFile(filePath, 'utf8');
-    const data = JSON.parse(content);
-    
-    // 检查是否过期
-    if (data.expires && data.expires < Date.now()) {
-      console.log(`文件已过期: ${key}`);
-      return null;
-    }
-    
-    console.log(`文件读取: ${key}`);
-    // 返回原始值
-    if (typeof data.value === 'string') {
-      // 尝试解析为数字
-      const num = parseFloat(data.value);
-      return isNaN(num) ? data.value : num;
-    }
-    return data.value;
-  } catch (e) {
-    // 文件不存在或读取失败，尝试内存
-    const memData = memoryStore.get(key);
-    if (memData) {
-      if (memData.expires && memData.expires < Date.now()) {
-        memoryStore.delete(key);
-        return null;
-      }
-      return memData.value;
-    }
-    return null;
-  }
-}
-
-// 中国银行外汇牌价URL
+// 中国银行外汇牌价
 const BOC_URL = 'https://www.boc.cn/sourcedb/whpj/';
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  const today = new Date().toISOString().split('T')[0];
   
-  console.log('API调用开始，使用文件存储模式');
-  
-  try {
-    console.log('尝试抓取中国银行外汇牌价...');
-    const bocData = await fetchBOCRates();
-    
-    if (bocData.success) {
-      console.log('中国银行数据获取成功');
-      const processed = await processAndStoreRates(bocData.rates, '中国银行');
-      return res.json({ 
-        success: true, 
-        source: '中国银行外汇牌价', 
-        base: 'USD', 
-        date: bocData.date,
-        rates: processed 
-      });
-    }
-  } catch (error) {
-    console.log('中国银行抓取失败:', error.message);
+  if (!getGitHubToken()) {
+    console.log('未设置GITHUB_TOKEN');
   }
   
-  // 回退到 exchangerate-api
-  console.log('回退到 exchangerate-api...');
   try {
-    const fallbackData = await fetchFallbackRates();
-    const processed = await processAndStoreRates(fallbackData.rates, 'exchangerate-api');
+    const bocData = await fetchBOCRates();
+    if (bocData.success) {
+      const processed = await processRates(bocData.rates, today);
+      await pushRatesToGitHub(bocData.rates, '中国银行', today);
+      return res.json({ 
+        success: true, source: '中国银行', date: today, rates: processed,
+        github: getGitHubToken() ? '已推送' : '未配置'
+      });
+    }
+  } catch (e) {}
+  
+  try {
+    const fallback = await fetchFallbackRates();
+    const processed = await processRates(fallback.rates, today);
+    await pushRatesToGitHub(fallback.rates, 'exchangerate', today);
     return res.json({ 
-      success: true, 
-      source: 'exchangerate-api (备用)', 
-      base: 'USD', 
-      date: fallbackData.date,
-      rates: processed 
+      success: true, source: 'exchangerate (备用)', date: today, rates: processed,
+      github: getGitHubToken() ? '已推送' : '未配置'
     });
-  } catch (error) {
-    console.error('备用API也失败:', error);
-    return res.status(500).json({ error: '所有数据源均不可用' });
+  } catch (e) {
+    return res.status(500).json({ error: '失败' });
   }
 };
 
-// 抓取中国银行牌价
 async function fetchBOCRates() {
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'zh-CN,zh;q=0.9',
-    'Referer': 'https://www.boc.cn/'
-  };
-  
-  const response = await fetch(BOC_URL, { headers, timeout: 10000 });
-  const html = await response.text();
+  const res = await fetch(BOC_URL, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+      'Accept': 'text/html',
+      'Accept-Language': 'zh-CN'
+    },
+    timeout: 10000
+  });
+  const html = await res.text();
   
   const today = new Date().toISOString().split('T')[0];
-  
-  // 货币映射
   const currencyMap = {
-    '美元': 'USD', '欧元': 'EUR', '英镑': 'GBP',
-    '泰国铢': 'THB', '印尼卢比': 'IDR', '卢布': 'RUB',
-    '菲律宾比索': 'PHP', '越南盾': 'VND'
+    '美元': 'USD', '欧元': 'EUR', '英镑': 'GBP', '泰国铢': 'THB',
+    '印尼卢比': 'IDR', '卢布': 'RUB', '菲律宾比索': 'PHP', '越南盾': 'VND'
   };
   
   const rates = {};
-  
-  for (const [cnName, code] of Object.entries(currencyMap)) {
-    const pattern = new RegExp(`${cnName}[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>`);
+  for (const [cn, code] of Object.entries(currencyMap)) {
+    const pattern = new RegExp(`${cn}[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>`);
     const match = html.match(pattern);
-    
     if (match && match[4]) {
-      const zhonghangRate = parseFloat(match[4]);
-      if (!isNaN(zhonghangRate) && zhonghangRate > 0) {
-        rates[code] = zhonghangRate;
-      }
+      const rate = parseFloat(match[4]);
+      if (!isNaN(rate) && rate > 0) rates[code] = rate;
     }
   }
   
-  console.log('抓取到的币种:', Object.keys(rates));
+  if (!rates.USD) throw new Error('无USD数据');
   
-  // 转换为以USD为基准的汇率
-  if (rates.USD) {
-    const usdCnyRate = rates.USD;
-    const usdBasedRates = {};
-    
-    for (const [code, cnyRate] of Object.entries(rates)) {
-      if (code === 'USD') {
-        usdBasedRates[code] = 1.0;
-      } else {
-        usdBasedRates[code] = usdCnyRate / cnyRate;
-      }
-    }
-    
-    usdBasedRates.CNY = usdCnyRate / 100;
-    
-    // 补充其他币种
-    try {
-      const fallbackRes = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
-      const fallbackData = await fallbackRes.json();
-      ['MXN', 'PLN'].forEach(code => {
-        if (fallbackData.rates[code] && !usdBasedRates[code]) {
-          usdBasedRates[code] = fallbackData.rates[code];
-        }
-      });
-    } catch (e) {}
-    
-    return { success: true, rates: usdBasedRates, date: today };
+  const usdCnyRate = rates.USD;
+  const usdBased = { USD: 1.0 };
+  
+  for (const [code, cnyRate] of Object.entries(rates)) {
+    if (code !== 'USD') usdBased[code] = usdCnyRate / cnyRate;
   }
+  usdBased.CNY = usdCnyRate / 100;
   
-  throw new Error('无法解析中国银行汇率数据');
+  // 补充币种
+  try {
+    const fb = await fetch('https://api.exchangerate-api.com/v4/latest/USD').then(r => r.json());
+    ['MXN', 'PLN'].forEach(c => { if (fb.rates[c] && !usdBased[c]) usdBased[c] = fb.rates[c]; });
+  } catch (e) {}
+  
+  return { success: true, rates: usdBased, date: today };
 }
 
-// 备用API
 async function fetchFallbackRates() {
-  const response = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
-  const data = await response.json();
-  
+  const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+  const data = await res.json();
   const targets = ['CNY', 'EUR', 'GBP', 'IDR', 'RUB', 'PHP', 'PLN', 'THB', 'MXN', 'VND'];
   const rates = {};
-  
-  for (const code of targets) {
-    if (data.rates[code]) {
-      rates[code] = data.rates[code];
-    }
-  }
-  
+  targets.forEach(c => { if (data.rates[c]) rates[c] = data.rates[c]; });
   return { success: true, rates, date: data.date };
 }
 
-// 处理和存储汇率
-async function processAndStoreRates(rates, source) {
+async function processRates(rates, date) {
   const targets = ['CNY', 'EUR', 'GBP', 'IDR', 'RUB', 'PHP', 'PLN', 'THB', 'MXN', 'VND'];
   const names = { 
     CNY: '人民币', EUR: '欧元', GBP: '英镑', IDR: '印尼盾', RUB: '卢布', 
     PHP: '菲律宾比索', PLN: '兹罗提', THB: '泰铢', MXN: '墨西哥比索', VND: '越南盾' 
   };
   
-  const today = new Date().toISOString().split('T')[0];
   const result = [];
+  const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+  const yestKey = yesterday.toISOString().split('T')[0];
   
   for (const code of targets) {
     const rate = rates[code];
     if (!rate) continue;
     
-    // 计算涨跌
-    let change = 0;
-    let trend = 'up';
-    
-    const yesterdayKey = `RATE:${code}:${getYesterday()}`;
-    const yesterdayRate = await getData(yesterdayKey);
-    
-    if (yesterdayRate) {
-      change = ((rate - yesterdayRate) / yesterdayRate) * 100;
-      trend = change >= 0 ? 'up' : 'down';
-    } else {
-      change = (Math.random() - 0.5) * 1;
+    let change = 0, trend = 'up';
+    const yestRate = await getData(`${code}:${yestKey}`);
+    if (yestRate) {
+      change = ((rate - yestRate) / yestRate) * 100;
       trend = change >= 0 ? 'up' : 'down';
     }
     
-    // 存储到文件
-    const todayKey = `RATE:${code}:${today}`;
-    await storeData(todayKey, String(rate), 60 * 60 * 24 * 90);
+    await storeData(`${code}:${date}`, rate);
     
     result.push({
-      code,
-      name: names[code],
+      code, name: names[code],
       rate: code === 'IDR' || code === 'VND' ? rate.toFixed(2) : rate.toFixed(4),
-      change: change.toFixed(2),
-      trend
+      change: change.toFixed(2), trend
     });
   }
-  
-  // 存储完整数据
-  const ratesObj = {};
-  targets.forEach(code => { if (rates[code]) ratesObj[code] = rates[code]; });
-  await storeData(`RATES:${today}`, JSON.stringify(ratesObj), 60 * 60 * 24 * 90);
-  await storeData(`SOURCE:${today}`, source, 60 * 60 * 24 * 90);
-  await storeData('LAST_UPDATE', new Date().toISOString(), 60 * 60 * 24 * 90);
-  
-  console.log(`存储完成，共${result.length}个币种`);
   
   return result;
 }
