@@ -337,11 +337,33 @@
             document.querySelector('.refresh-btn').innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> 刷新数据';
         }
         
+        // 每天早上7点更新汇率
+        function scheduleNextUpdate() {
+            const now = new Date();
+            const nextUpdate = new Date();
+            nextUpdate.setHours(7, 0, 0, 0);
+            
+            // 如果已经过了7点，设置为明天7点
+            if (now >= nextUpdate) {
+                nextUpdate.setDate(nextUpdate.getDate() + 1);
+            }
+            
+            const msUntilUpdate = nextUpdate - now;
+            console.log(`下次更新: ${nextUpdate.toLocaleString()}，还有 ${Math.round(msUntilUpdate/1000/60)} 分钟`);
+            
+            // 设置定时器
+            setTimeout(() => {
+                refreshData();
+                // 然后每24小时更新一次
+                setInterval(refreshData, 24 * 60 * 60 * 1000);
+            }, msUntilUpdate);
+        }
+        
         document.addEventListener('DOMContentLoaded', () => {
             renderAlerts();
-            refreshData();
+            refreshData(); // 首次加载立即刷新
+            scheduleNextUpdate(); // 安排每天早上7点更新
         });
-        setInterval(refreshData, 7200000); // 2小时刷新一次
     </script>
 </body>
 </html>
