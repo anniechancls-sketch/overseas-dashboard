@@ -340,29 +340,38 @@
         // 每天早上9:30更新汇率（中国银行牌价9:15发布）
         function scheduleNextUpdate() {
             const now = new Date();
-            const nextUpdate = new Date();
-            nextUpdate.setHours(9, 30, 0, 0);
+            const beijingTime = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+            console.log(`⏰ 前端定时器启动: ${beijingTime}`);
             
-            // 如果已经过了7点，设置为明天7点
-            if (now >= nextUpdate) {
-                nextUpdate.setDate(nextUpdate.getDate() + 1);
+            // 立即刷新一次
+            refreshData();
+            
+            // 每2小时刷新一次（7200000毫秒）
+            const refreshInterval = 2 * 60 * 60 * 1000; // 2小时
+            setInterval(refreshData, refreshInterval);
+            
+            // 额外：每天9:30（北京时间）强制刷新一次（确保中国银行数据更新）
+            const nineThirty = new Date();
+            nineThirty.setHours(9, 30, 0, 0);
+            if (now >= nineThirty) {
+                nineThirty.setDate(nineThirty.getDate() + 1);
             }
-            
-            const msUntilUpdate = nextUpdate - now;
-            console.log(`下次更新: ${nextUpdate.toLocaleString()}（中国银行牌价9:15发布），还有 ${Math.round(msUntilUpdate/1000/60)} 分钟`);
-            
-            // 设置定时器
+            const msToNineThirty = nineThirty - now;
             setTimeout(() => {
+                console.log('🕘 9:30定时刷新触发');
                 refreshData();
-                // 然后每24小时更新一次
+                // 设置每天的9:30刷新
                 setInterval(refreshData, 24 * 60 * 60 * 1000);
-            }, msUntilUpdate);
+            }, msToNineThirty);
+            
+            console.log(`🔄 已设置每2小时自动刷新`);
+            console.log(`⏳ 下次9:30刷新: ${nineThirty.toLocaleString('zh-CN')} (${Math.round(msToNineThirty/1000/60)}分钟后)`);
         }
         
         document.addEventListener('DOMContentLoaded', () => {
             renderAlerts();
             refreshData(); // 首次加载立即刷新
-            scheduleNextUpdate(); // 安排每天早上7点更新
+            scheduleNextUpdate(); // 安排定期更新 (每2小时 + 每天9:30)
         });
     </script>
 </body>

@@ -1,74 +1,91 @@
 const fetch = require('node-fetch');
 
-// 版本: 2026-03-13 - GitHub存储版本
-// GitHub配置
+// ========== 配置 ==========
 const GITHUB_OWNER = 'anniechancls-sketch';
 const GITHUB_REPO = 'overseas-dashboard';
-const DATA_BRANCH = 'data'; // 使用独立分支，避免触发Vercel部署
+const DATA_BRANCH = 'data';
+const BOC_URL = 'https://www.boc.cn/sourcedb/whpj/';
 
-// GitHub API Token
+// 目标货币
+const TARGET_CURRENCIES = ['CNY', 'EUR', 'GBP', 'IDR', 'RUB', 'PHP', 'PLN', 'THB', 'MXN', 'VND'];
+const CURRENCY_NAMES = {
+  CNY: '人民币', EUR: '欧元', GBP: '英镑', IDR: '印尼盾', RUB: '卢布',
+  PHP: '菲律宾比索', PLN: '兹罗提', THB: '泰铢', MXN: '墨西哥比索', VND: '越南盾'
+};
+const CURRENCY_MAP = {
+  '美元': 'USD', '欧元': 'EUR', '英镑': 'GBP', '泰国铢': 'THB',
+  '印尼卢比': 'IDR', '卢布': 'RUB', '菲律宾比索': 'PHP', '越南盾': 'VND'
+};
+
+// ========== 缓存 (5分钟有效) ==========
+let cache = { data: null, timestamp: 0 };
+const CACHE_TTL = 5 * 60 * 1000;
+
 function getGitHubToken() {
   return process.env.GITHUB_TOKEN;
 }
 
-// 推送到GitHub
+// ========== GitHub 推送 ==========
 async function pushToGitHub(filename, content, message) {
   const token = getGitHubToken();
-  console.log('Token存在:', !!token);
   if (!token) {
-    console.log('未设置GITHUB_TOKEN');
+    console.log('❌ 未设置GITHUB_TOKEN');
     return { success: false, error: 'NO_TOKEN' };
   }
-  
+
+  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/rates/${filename}`;
+
   try {
-    // 尝试推送到根目录（避免data目录不存在问题）
-    const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/rates/${filename}`;
-    console.log('推送URL:', apiUrl);
-    
-    // 检查文件是否存在
+    // 检查文件是否存在 (获取SHA)
     let sha = null;
     try {
       const checkRes = await fetch(apiUrl, {
-        headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+        headers: {
+          'Authorization': `token ${token}`,
+          'Accept': 'application/vnd.github.v3+json'
+        }
       });
       if (checkRes.status === 200) {
         const checkData = await checkRes.json();
         sha = checkData.sha;
       }
-    } catch (e) {}
-    
-    // 创建或更新
+    } catch (e) {
+      console.log('文件不存在，将创建新文件');
+    }
+
+    // 推送
     const body = {
       message: message,
       content: Buffer.from(content).toString('base64'),
       branch: DATA_BRANCH
     };
     if (sha) body.sha = sha;
-    
+
     const res = await fetch(apiUrl, {
       method: 'PUT',
-      headers: { 
-        'Authorization': `token ${token}`, 
+      headers: {
+        'Authorization': `token ${token}`,
         'Accept': 'application/vnd.github.v3+json',
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(body)
     });
-    
+
     if (res.status === 200 || res.status === 201) {
-      console.log(`GitHub推送成功: ${filename}`);
+      console.log(`✅ GitHub推送成功: ${filename}`);
       return { success: true };
     }
+
     const error = await res.text();
-    console.log(`GitHub推送失败: ${res.status} - ${error}`);
+    console.log(`❌ GitHub推送失败: ${res.status} - ${error}`);
     return { success: false, error: `${res.status}: ${error}` };
   } catch (e) {
-    console.log('GitHub推送错误:', e.message);
-    return false;
+    console.log('❌ GitHub推送错误:', e.message);
+    return { success: false, error: e.message };
   }
 }
 
-// 内存存储
+// ========== 内存存储 (用于跨请求对比) ==========
 const memoryStore = new Map();
 
 async function storeData(key, value) {
@@ -79,14 +96,85 @@ async function getData(key) {
   return memoryStore.get(key) || null;
 }
 
-// 推送到GitHub的函数
+// ========== 中国银行汇率 ==========
+async function fetchBOCRates() {
+  console.log('🌐 抓取中国银行汇率...');
+  const res = await fetch(BOC_URL, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': 'text/html,application/xhtml+xml',
+      'Accept-Language': 'zh-CN,zh;q=0.9'
+    }
+  });
+
+  const html = await res.text();
+  const rates = {};
+
+  for (const [cn, code] of Object.entries(CURRENCY_MAP)) {
+    // 匹配: 币种名 + 4个td (现汇买入价, 现钞买入价, 现汇卖出价, 现钞卖出价)
+    const pattern = new RegExp(`${cn}[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>`);
+    const match = html.match(pattern);
+    if (match && match[4]) {
+      const rate = parseFloat(match[4]); // 现钞卖出价
+      if (!isNaN(rate) && rate > 0) rates[code] = rate;
+    }
+  }
+
+  if (!rates.USD) {
+    throw new Error('❌ 未获取到USD汇率');
+  }
+
+  // BOC: 100外币 = X CNY → 转换为: 1 USD = ? 外币
+  const usdCnyRate = rates.USD;
+  const usdBased = { USD: 1.0 };
+
+  for (const [code, cnyRate] of Object.entries(rates)) {
+    if (code !== 'USD') {
+      usdBased[code] = usdCnyRate / cnyRate;
+    }
+  }
+
+  // CNY: 100 CNY = X USD → 1 USD = 100 / X CNY
+  usdBased.CNY = 100 / usdCnyRate;
+
+  // 补充MXN, PLN (BOC没有的)
+  try {
+    const fb = await fetch('https://api.exchangerate-api.com/v4/latest/USD', { timeout: 5000 });
+    const fbData = await fb.json();
+    ['MXN', 'PLN'].forEach(c => {
+      if (fbData.rates[c] && !usdBased[c]) usdBased[c] = fbData.rates[c];
+    });
+  } catch (e) {
+    console.log('⚠️ 备用API获取失败');
+  }
+
+  console.log('✅ 中国银行汇率获取成功');
+  return { success: true, rates: usdBased };
+}
+
+// ========== 备用汇率API ==========
+async function fetchFallbackRates() {
+  console.log('🌐 使用备用API (exchangerate-api)...');
+  const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+  const data = await res.json();
+
+  const rates = {};
+  TARGET_CURRENCIES.forEach(c => {
+    if (data.rates[c]) rates[c] = data.rates[c];
+  });
+
+  return { success: true, rates, date: data.date };
+}
+
+// ========== 推送到GitHub ==========
 async function pushRatesToGitHub(rates, source, date) {
   if (!getGitHubToken()) return { success: false, error: 'NO_TOKEN' };
-  
-  const targets = ['CNY', 'EUR', 'GBP', 'IDR', 'RUB', 'PHP', 'PLN', 'THB', 'MXN', 'VND'];
+
   const ratesObj = {};
-  targets.forEach(code => { if (rates[code]) ratesObj[code] = rates[code]; });
-  
+  TARGET_CURRENCIES.forEach(code => {
+    if (rates[code]) ratesObj[code] = rates[code];
+  });
+
   const data = {
     date: date,
     source: source,
@@ -94,137 +182,152 @@ async function pushRatesToGitHub(rates, source, date) {
     rates: ratesObj,
     updatedAt: new Date().toISOString()
   };
-  
-  return await pushToGitHub(`${date}.json`, JSON.stringify(data, null, 2), `汇率数据: ${date} (${source})`);
+
+  return await pushToGitHub(
+    `${date}.json`,
+    JSON.stringify(data, null, 2),
+    `汇率数据: ${date} (${source})`
+  );
 }
 
-// 中国银行外汇牌价
-const BOC_URL = 'https://www.boc.cn/sourcedb/whpj/';
-
-module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  const today = new Date().toISOString().split('T')[0];
-  
-  if (!getGitHubToken()) {
-    console.log('未设置GITHUB_TOKEN');
-  }
-  
-  try {
-    const bocData = await fetchBOCRates();
-    if (bocData.success) {
-      const processed = await processRates(bocData.rates, today);
-      const pushResult = await pushRatesToGitHub(bocData.rates, '中国银行', today);
-      return res.json({ 
-        success: true, source: '中国银行', date: today, rates: processed,
-        github: pushResult?.success ? '已推送' : `失败: ${pushResult?.error || '检查Token权限'}`
-      });
-    }
-  } catch (e) {}
-  
-  try {
-    const fallback = await fetchFallbackRates();
-    const processed = await processRates(fallback.rates, today);
-    const pushResult = await pushRatesToGitHub(fallback.rates, 'exchangerate', today);
-    return res.json({ 
-      success: true, source: 'exchangerate (备用)', date: today, rates: processed,
-      github: pushResult?.success ? '已推送' : `失败: ${pushResult?.error || '检查Token权限'}`
-    });
-  } catch (e) {
-    return res.status(500).json({ error: '失败' });
-  }
-};
-
-async function fetchBOCRates() {
-  const res = await fetch(BOC_URL, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0',
-      'Accept': 'text/html',
-      'Accept-Language': 'zh-CN'
-    },
-    timeout: 10000
-  });
-  const html = await res.text();
-  
-  const today = new Date().toISOString().split('T')[0];
-  const currencyMap = {
-    '美元': 'USD', '欧元': 'EUR', '英镑': 'GBP', '泰国铢': 'THB',
-    '印尼卢比': 'IDR', '卢布': 'RUB', '菲律宾比索': 'PHP', '越南盾': 'VND'
-  };
-  
-  const rates = {};
-  for (const [cn, code] of Object.entries(currencyMap)) {
-    const pattern = new RegExp(`${cn}[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>`);
-    const match = html.match(pattern);
-    if (match && match[4]) {
-      const rate = parseFloat(match[4]);
-      if (!isNaN(rate) && rate > 0) rates[code] = rate;
-    }
-  }
-  
-  if (!rates.USD) throw new Error('无USD数据');
-  
-  const usdCnyRate = rates.USD;
-  const usdBased = { USD: 1.0 };
-  
-  for (const [code, cnyRate] of Object.entries(rates)) {
-    if (code !== 'USD') usdBased[code] = usdCnyRate / cnyRate;
-  }
-  usdBased.CNY = usdCnyRate / 100;
-  
-  // 补充币种
-  try {
-    const fb = await fetch('https://api.exchangerate-api.com/v4/latest/USD').then(r => r.json());
-    ['MXN', 'PLN'].forEach(c => { if (fb.rates[c] && !usdBased[c]) usdBased[c] = fb.rates[c]; });
-  } catch (e) {}
-  
-  return { success: true, rates: usdBased, date: today };
-}
-
-async function fetchFallbackRates() {
-  const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
-  const data = await res.json();
-  const targets = ['CNY', 'EUR', 'GBP', 'IDR', 'RUB', 'PHP', 'PLN', 'THB', 'MXN', 'VND'];
-  const rates = {};
-  targets.forEach(c => { if (data.rates[c]) rates[c] = data.rates[c]; });
-  return { success: true, rates, date: data.date };
-}
-
+// ========== 处理汇率数据 ==========
 async function processRates(rates, date) {
-  const targets = ['CNY', 'EUR', 'GBP', 'IDR', 'RUB', 'PHP', 'PLN', 'THB', 'MXN', 'VND'];
-  const names = { 
-    CNY: '人民币', EUR: '欧元', GBP: '英镑', IDR: '印尼盾', RUB: '卢布', 
-    PHP: '菲律宾比索', PLN: '兹罗提', THB: '泰铢', MXN: '墨西哥比索', VND: '越南盾' 
-  };
-  
   const result = [];
-  const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+
+  // 计算昨日数据用于对比
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
   const yestKey = yesterday.toISOString().split('T')[0];
-  
-  for (const code of targets) {
+
+  for (const code of TARGET_CURRENCIES) {
     const rate = rates[code];
     if (!rate) continue;
-    
-    let change = 0, trend = 'up';
+
+    let change = 0;
+    let trend = 'up';
+
+    // 从内存存储获取昨日汇率
     const yestRate = await getData(`${code}:${yestKey}`);
     if (yestRate) {
       change = ((rate - yestRate) / yestRate) * 100;
       trend = change >= 0 ? 'up' : 'down';
     }
-    
+
+    // 存储今日汇率
     await storeData(`${code}:${date}`, rate);
-    
+
     result.push({
-      code, name: names[code],
-      rate: code === 'IDR' || code === 'VND' ? rate.toFixed(2) : rate.toFixed(4),
-      change: change.toFixed(2), trend
+      code,
+      name: CURRENCY_NAMES[code],
+      rate: (code === 'IDR' || code === 'VND') ? rate.toFixed(2) : rate.toFixed(4),
+      change: change.toFixed(2),
+      trend
     });
   }
+
+  return result;
+}
+
+// ========== 主处理函数 ==========
+async function getExchangeData(forceRefresh = false) {
+  const now = Date.now();
+  const today = new Date().toISOString().split('T')[0];
+  
+  // 检查缓存，除非强制刷新
+  if (!forceRefresh && cache.data && (now - cache.timestamp) < CACHE_TTL) {
+    console.log('📦 使用缓存数据');
+    return cache.data;
+  }
+
+  console.log(`🔄 ${forceRefresh ? '强制刷新' : '缓存失效'}，获取最新数据...`);
+  
+  let rates, source;
+
+  // 优先使用中国银行
+  try {
+    const bocData = await fetchBOCRates();
+    if (bocData.success) {
+      rates = bocData.rates;
+      source = '中国银行';
+      console.log('✅ 中国银行数据获取成功');
+    }
+  } catch (e) {
+    console.log('❌ 中国银行API失败:', e.message);
+  }
+
+  // 备用: exchangerate-api
+  if (!rates) {
+    try {
+      const fallback = await fetchFallbackRates();
+      rates = fallback.rates;
+      source = 'exchangerate (备用)';
+      console.log('✅ 备用API数据获取成功');
+    } catch (e) {
+      throw new Error('所有汇率API均失败');
+    }
+  }
+
+  // 处理并推送
+  const processed = await processRates(rates, today);
+  const pushResult = await pushRatesToGitHub(rates, source, today);
+
+  const result = {
+    success: true,
+    source: source,
+    date: today,
+    rates: processed,
+    github: pushResult?.success ? '✅ 已推送' : `❌ ${pushResult?.error || '未知错误'}`,
+    timestamp: new Date().toISOString()
+  };
+  
+  cache.data = result;
+  cache.timestamp = now;
+  
+  console.log(`🎉 数据更新完成: ${source}, GitHub推送: ${pushResult?.success ? '成功' : '失败'}`);
   
   return result;
 }
 
-function getYesterday() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().split('T')[0];
-}
+// ========== Vercel API 入口 ==========
+module.exports = async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  // 检查是否是cron触发的请求
+  const isCron = req.url.includes('cron=true') || req.headers['x-vercel-cron'] === 'true';
+  const now = new Date();
+  const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const timeStr = beijingTime.toISOString().replace('T', ' ').substring(0, 19);
+  
+  if (isCron) {
+    console.log(`⏰ Cron任务触发: ${timeStr} (北京时间)`);
+    console.log(`📊 请求URL: ${req.url}`);
+  } else {
+    console.log(`🌐 普通API请求: ${timeStr}`);
+  }
+
+  try {
+    const data = await getExchangeData(isCron); // Cron请求强制刷新
+    const response = {
+      ...data,
+      triggeredBy: isCron ? 'cron' : 'manual',
+      serverTime: timeStr
+    };
+    
+    return res.json(response);
+  } catch (e) {
+    console.error('❌ API错误:', e.message);
+    const errorResponse = {
+      error: e.message,
+      triggeredBy: isCron ? 'cron' : 'manual',
+      serverTime: timeStr,
+      success: false
+    };
+    return res.status(500).json(errorResponse);
+  }
+};
