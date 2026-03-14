@@ -47,7 +47,8 @@ async function pushToGitHub(filename, content, message) {
         headers: {
           'Authorization': `token ${token}`,
           'Accept': 'application/vnd.github.v3+json'
-        }
+        },
+        timeout: 10000 // 10秒超时
       });
       if (checkRes.status === 200) {
         const checkData = await checkRes.json();
@@ -72,7 +73,8 @@ async function pushToGitHub(filename, content, message) {
         'Accept': 'application/vnd.github.v3+json',
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      timeout: 10000 // 10秒超时
     });
 
     if (res.status === 200 || res.status === 201) {
@@ -104,10 +106,6 @@ async function getData(key) {
 async function fetchBOCRates() {
   console.log('🌐 抓取中国银行汇率...');
   
-  // 使用AbortController设置超时
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
-  
   try {
     const res = await fetch(BOC_URL, {
       headers: {
@@ -115,12 +113,10 @@ async function fetchBOCRates() {
         'Accept': 'text/html,application/xhtml+xml',
         'Accept-Language': 'zh-CN,zh;q=0.9'
       },
-      signal: controller.signal
+      timeout: 10000 // node-fetch 2.x原生支持10秒超时
     });
 
     const html = await res.text();
-    clearTimeout(timeoutId);
-    
     const rates = {};
 
     for (const [cn, code] of Object.entries(CURRENCY_MAP)) {
@@ -153,12 +149,9 @@ async function fetchBOCRates() {
 
     // 补充MXN, PLN (BOC没有的)
     try {
-      const fbController = new AbortController();
-      const fbTimeout = setTimeout(() => fbController.abort(), 5000);
       const fb = await fetch('https://api.exchangerate-api.com/v4/latest/USD', { 
-        signal: fbController.signal 
+        timeout: 5000 // 5秒超时
       });
-      clearTimeout(fbTimeout);
       const fbData = await fb.json();
       ['MXN', 'PLN'].forEach(c => {
         if (fbData.rates[c] && !usdBased[c]) usdBased[c] = fbData.rates[c];
@@ -171,7 +164,6 @@ async function fetchBOCRates() {
     return { success: true, rates: usdBased };
     
   } catch (error) {
-    clearTimeout(timeoutId);
     console.log('❌ 中国银行API请求失败:', error.message);
     throw error;
   }
@@ -181,17 +173,12 @@ async function fetchBOCRates() {
 async function fetchFallbackRates() {
   console.log('🌐 使用备用API (exchangerate-api)...');
   
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
-  
   try {
     const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD', {
-      signal: controller.signal
+      timeout: 10000 // 10秒超时
     });
-    clearTimeout(timeoutId);
     
     const data = await res.json();
-    
     const rates = {};
     TARGET_CURRENCIES.forEach(c => {
       if (data.rates[c]) rates[c] = data.rates[c];
@@ -200,7 +187,6 @@ async function fetchFallbackRates() {
     return { success: true, rates, date: data.date };
     
   } catch (error) {
-    clearTimeout(timeoutId);
     console.log('❌ 备用API请求失败:', error.message);
     throw error;
   }
