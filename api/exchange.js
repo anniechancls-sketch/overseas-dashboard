@@ -208,7 +208,12 @@ async function fetchFallbackRates() {
 
 // ========== 推送到GitHub ==========
 async function pushRatesToGitHub(rates, source, date) {
-  if (!getGitHubToken()) return { success: false, error: 'NO_TOKEN' };
+  const token = getGitHubToken();
+  if (!token) {
+    console.log('❌ GitHub Token未设置或为空');
+    return { success: false, error: 'NO_TOKEN' };
+  }
+  console.log('✅ GitHub Token存在，长度:', token.length);
 
   const ratesObj = {};
   TARGET_CURRENCIES.forEach(code => {
@@ -316,7 +321,10 @@ async function getExchangeData(forceRefresh = false) {
 
   // 处理并推送
   const processed = await processRates(rates, today);
+  console.log(`📊 处理了 ${processed.length} 种货币汇率`);
+  
   const pushResult = await pushRatesToGitHub(rates, source, today);
+  console.log(`📤 GitHub推送结果:`, pushResult);
 
   const result = {
     success: true,
@@ -324,7 +332,14 @@ async function getExchangeData(forceRefresh = false) {
     date: today,
     rates: processed,
     github: pushResult?.success ? '✅ 已推送' : `❌ ${pushResult?.error || '未知错误'}`,
-    timestamp: new Date().toISOString()
+    githubDetails: pushResult, // 添加详细推送信息
+    timestamp: new Date().toISOString(),
+    debug: {
+      isFirstPushToday,
+      shouldForceRefresh,
+      cacheTimestamp: cache.timestamp,
+      now
+    }
   };
   
   cache.data = result;
