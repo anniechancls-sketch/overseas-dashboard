@@ -103,72 +103,107 @@ async function getData(key) {
 // ========== 中国银行汇率 ==========
 async function fetchBOCRates() {
   console.log('🌐 抓取中国银行汇率...');
-  const res = await fetch(BOC_URL, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Accept': 'text/html,application/xhtml+xml',
-      'Accept-Language': 'zh-CN,zh;q=0.9'
-    }
-  });
-
-  const html = await res.text();
-  const rates = {};
-
-  for (const [cn, code] of Object.entries(CURRENCY_MAP)) {
-    // 匹配: 币种名 + 4个td (现汇买入价, 现钞买入价, 现汇卖出价, 现钞卖出价)
-    const pattern = new RegExp(`${cn}[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>`);
-    const match = html.match(pattern);
-    if (match && match[4]) {
-      const rate = parseFloat(match[4]); // 现钞卖出价
-      if (!isNaN(rate) && rate > 0) rates[code] = rate;
-    }
-  }
-
-  if (!rates.USD) {
-    throw new Error('❌ 未获取到USD汇率');
-  }
-
-  // BOC: 100外币 = X CNY → 转换为: 1 USD = ? 外币
-  const usdCnyRate = rates.USD;
-  const usdBased = { USD: 1.0 };
-
-  for (const [code, cnyRate] of Object.entries(rates)) {
-    if (code !== 'USD') {
-      // 1 USD = (usdCnyRate/100) CNY ÷ (cnyRate/100) 外币 = usdCnyRate / cnyRate 外币
-      usdBased[code] = usdCnyRate / cnyRate;
-    }
-  }
-
-  // CNY: 100 USD = usdCnyRate CNY → 1 USD = usdCnyRate / 100 CNY
-  usdBased.CNY = usdCnyRate / 100;
-
-  // 补充MXN, PLN (BOC没有的)
+  
+  // 使用AbortController设置超时
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
+  
   try {
-    const fb = await fetch('https://api.exchangerate-api.com/v4/latest/USD', { timeout: 5000 });
-    const fbData = await fb.json();
-    ['MXN', 'PLN'].forEach(c => {
-      if (fbData.rates[c] && !usdBased[c]) usdBased[c] = fbData.rates[c];
+    const res = await fetch(BOC_URL, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-CN,zh;q=0.9'
+      },
+      signal: controller.signal
     });
-  } catch (e) {
-    console.log('⚠️ 备用API获取失败');
-  }
 
-  console.log('✅ 中国银行汇率获取成功');
-  return { success: true, rates: usdBased };
+    const html = await res.text();
+    clearTimeout(timeoutId);
+    
+    const rates = {};
+
+    for (const [cn, code] of Object.entries(CURRENCY_MAP)) {
+      // 匹配: 币种名 + 4个td (现汇买入价, 现钞买入价, 现汇卖出价, 现钞卖出价)
+      const pattern = new RegExp(`${cn}[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>[\\s\\S]*?<td[^>]*>([\\d.]+)</td>`);
+      const match = html.match(pattern);
+      if (match && match[4]) {
+        const rate = parseFloat(match[4]); // 现钞卖出价
+        if (!isNaN(rate) && rate > 0) rates[code] = rate;
+      }
+    }
+
+    if (!rates.USD) {
+      throw new Error('❌ 未获取到USD汇率');
+    }
+
+    // BOC: 100外币 = X CNY → 转换为: 1 USD = ? 外币
+    const usdCnyRate = rates.USD;
+    const usdBased = { USD: 1.0 };
+
+    for (const [code, cnyRate] of Object.entries(rates)) {
+      if (code !== 'USD') {
+        // 1 USD = (usdCnyRate/100) CNY ÷ (cnyRate/100) 外币 = usdCnyRate / cnyRate 外币
+        usdBased[code] = usdCnyRate / cnyRate;
+      }
+    }
+
+    // CNY: 100 USD = usdCnyRate CNY → 1 USD = usdCnyRate / 100 CNY
+    usdBased.CNY = usdCnyRate / 100;
+
+    // 补充MXN, PLN (BOC没有的)
+    try {
+      const fbController = new AbortController();
+      const fbTimeout = setTimeout(() => fbController.abort(), 5000);
+      const fb = await fetch('https://api.exchangerate-api.com/v4/latest/USD', { 
+        signal: fbController.signal 
+      });
+      clearTimeout(fbTimeout);
+      const fbData = await fb.json();
+      ['MXN', 'PLN'].forEach(c => {
+        if (fbData.rates[c] && !usdBased[c]) usdBased[c] = fbData.rates[c];
+      });
+    } catch (e) {
+      console.log('⚠️ 备用API获取失败:', e.message);
+    }
+
+    console.log('✅ 中国银行汇率获取成功');
+    return { success: true, rates: usdBased };
+    
+  } catch (error) {
+    clearTimeout(timeoutId);
+    console.log('❌ 中国银行API请求失败:', error.message);
+    throw error;
+  }
 }
 
 // ========== 备用汇率API ==========
 async function fetchFallbackRates() {
   console.log('🌐 使用备用API (exchangerate-api)...');
-  const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
-  const data = await res.json();
+  
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
+  
+  try {
+    const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD', {
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    
+    const data = await res.json();
+    
+    const rates = {};
+    TARGET_CURRENCIES.forEach(c => {
+      if (data.rates[c]) rates[c] = data.rates[c];
+    });
 
-  const rates = {};
-  TARGET_CURRENCIES.forEach(c => {
-    if (data.rates[c]) rates[c] = data.rates[c];
-  });
-
-  return { success: true, rates, date: data.date };
+    return { success: true, rates, date: data.date };
+    
+  } catch (error) {
+    clearTimeout(timeoutId);
+    console.log('❌ 备用API请求失败:', error.message);
+    throw error;
+  }
 }
 
 // ========== 推送到GitHub ==========
