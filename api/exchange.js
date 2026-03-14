@@ -130,12 +130,13 @@ async function fetchBOCRates() {
 
   for (const [code, cnyRate] of Object.entries(rates)) {
     if (code !== 'USD') {
+      // 1 USD = (usdCnyRate/100) CNY ÷ (cnyRate/100) 外币 = usdCnyRate / cnyRate 外币
       usdBased[code] = usdCnyRate / cnyRate;
     }
   }
 
-  // CNY: 100 CNY = X USD → 1 USD = 100 / X CNY
-  usdBased.CNY = 100 / usdCnyRate;
+  // CNY: 100 USD = usdCnyRate CNY → 1 USD = usdCnyRate / 100 CNY
+  usdBased.CNY = usdCnyRate / 100;
 
   // 补充MXN, PLN (BOC没有的)
   try {
