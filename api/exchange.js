@@ -18,7 +18,11 @@ const CURRENCY_MAP = {
 };
 
 // ========== 缓存 (5分钟有效) ==========
-let cache = { data: null, timestamp: 0 };
+let cache = { 
+  data: null, 
+  timestamp: 0,
+  lastPushDate: null  // 记录最近一次推送的日期
+};
 const CACHE_TTL = 5 * 60 * 1000;
 
 function getGitHubToken() {
@@ -234,13 +238,20 @@ async function getExchangeData(forceRefresh = false) {
   const now = Date.now();
   const today = new Date().toISOString().split('T')[0];
   
-  // 检查缓存，除非强制刷新
-  if (!forceRefresh && cache.data && (now - cache.timestamp) < CACHE_TTL) {
+  // 检查是否需要强制刷新（包括cron触发或今天首次推送）
+  const isFirstPushToday = !cache.lastPushDate || cache.lastPushDate !== today;
+  const shouldForceRefresh = forceRefresh || isFirstPushToday;
+  
+  // 检查缓存，除非需要强制刷新
+  if (!shouldForceRefresh && cache.data && (now - cache.timestamp) < CACHE_TTL) {
     console.log('📦 使用缓存数据');
     return cache.data;
   }
 
-  console.log(`🔄 ${forceRefresh ? '强制刷新' : '缓存失效'}，获取最新数据...`);
+  console.log(`🔄 ${shouldForceRefresh ? '强制刷新' : '缓存失效'}，获取最新数据...`);
+  if (isFirstPushToday) {
+    console.log(`📅 今天首次推送: ${today}`);
+  }
   
   let rates, source;
 
@@ -283,6 +294,12 @@ async function getExchangeData(forceRefresh = false) {
   
   cache.data = result;
   cache.timestamp = now;
+  
+  // 如果GitHub推送成功，更新最后推送日期
+  if (pushResult?.success) {
+    cache.lastPushDate = today;
+    console.log(`📅 已更新最后推送日期: ${today}`);
+  }
   
   console.log(`🎉 数据更新完成: ${source}, GitHub推送: ${pushResult?.success ? '成功' : '失败'}`);
   
