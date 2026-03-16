@@ -57,6 +57,14 @@
         }
         .title-group .subtitle { color: var(--text-secondary); font-size: 13px; }
         .header-right { display: flex; align-items: center; gap: 24px; }
+        .trends-link {
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 20px; background: linear-gradient(135deg, rgba(212,175,55,0.15), rgba(0,212,170,0.1));
+            border: 1px solid var(--border-highlight); border-radius: 8px;
+            color: var(--accent-gold); font-size: 13px; font-weight: 500;
+            text-decoration: none; transition: all 0.3s ease;
+        }
+        .trends-link:hover { background: linear-gradient(135deg, rgba(212,175,55,0.25), rgba(0,212,170,0.2)); transform: translateY(-2px); }
         .last-update { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
         .update-indicator {
             width: 8px; height: 8px; background: var(--accent-cyan);
@@ -172,6 +180,10 @@
             </div>
         </div>
         <div class="header-right">
+            <a href="trends.html" class="trends-link">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>
+                查看趋势图
+            </a>
             <div class="last-update">
                 <div class="update-indicator"></div>
                 <span id="updateTime">加载中...</span>
