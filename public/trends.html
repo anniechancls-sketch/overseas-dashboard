@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>汇率波动趋势图 | 海外业务看板</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f1419 0%, #1a2332 100%);
+            color: #e2e8f0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .header h1 { font-size: 28px; margin-bottom: 10px; color: #60a5fa; }
+        .header p { color: #94a3b8; font-size: 14px; }
+        .currency-selector {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 30px;
+        }
+        .currency-btn {
+            padding: 10px 20px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.05);
+            color: #e2e8f0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .currency-btn:hover { background: rgba(255,255,255,0.1); }
+        .currency-btn.active {
+            background: #3b82f6;
+            border-color: #3b82f6;
+        }
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+            gap: 20px;
+        }
+        .chart-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .chart-card h3 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: #94a3b8;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .chart-card canvas {
+            max-height: 300px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+            text-align: center;
+        }
+        .stat-card .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #60a5fa;
+        }
+        .stat-card .label {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 5px;
+        }
+        .loading {
+            text-align: center;
+            padding: 60px;
+            color: #94a3b8;
+        }
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #f87171;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📈 汇率波动趋势图</h1>
+            <p>基于 USD 基准货币的历史汇率数据分析 | 数据来源：中国银行</p>
+        </div>
+
+        <div id="loading" class="loading">
+            <p>正在加载历史汇率数据...</p>
+        </div>
+
+        <div id="content" style="display: none;">
+            <div class="stats-grid" id="statsGrid"></div>
+            
+            <div class="currency-selector" id="currencySelector"></div>
+            
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>📊 汇率走势对比</h3>
+                    <canvas id="trendChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>📉 波动幅度分析</h3>
+                    <canvas id="volatilityChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+    </div>
+
+    <script>
+        const CURRENCY_NAMES = {
+            'CNY': '人民币', 'EUR': '欧元', 'GBP': '英镑', 'IDR': '印尼盾',
+            'RUB': '卢布', 'PHP': '菲律宾比索', 'PLN': '波兰兹罗提',
+            'THB': '泰铢', 'MXN': '墨西哥比索', 'VND': '越南盾'
+        };
+
+        let historicalData = [];
+        let selectedCurrencies = ['CNY', 'EUR', 'GBP'];
+        let trendChart, volatilityChart;
+
+        async function fetchHistoricalData() {
+            const dates = ['2026-03-13', '2026-03-14', '2026-03-15', '2026-03-16'];
+            const data = [];
+            
+            for (const date of dates) {
+                try {
+                    const response = await fetch(`https://raw.githubusercontent.com/anniechancls-sketch/overseas-dashboard/data/rates/${date}.json`);
+                    if (response.ok) {
+                        const json = await response.json();
+                        data.push({
+                            date: date,
+                            rates: json.rates
+                        });
+                    }
+                } catch (e) {
+                    console.error(`Failed to fetch ${date}:`, e);
+                }
+            }
+            
+            return data;
+        }
+
+        function calculateStats(data) {
+            const stats = {};
+            const currencies = Object.keys(data[data.length - 1].rates);
+            
+            currencies.forEach(currency => {
+                const values = data.map(d => d.rates[currency]).filter(v => v);
+                if (values.length >= 2) {
+                    const first = values[0];
+                    const last = values[values.length - 1];
+                    const min = Math.min(...values);
+                    const max = Math.max(...values);
+                    const change = ((last - first) / first * 100).toFixed(2);
+                    
+                    stats[currency] = {
+                        current: last.toFixed(4),
+                        change: change,
+                        min: min.toFixed(4),
+                        max: max.toFixed(4),
+                        volatility: ((max - min) / min * 100).toFixed(2)
+                    };
+                }
+            });
+            
+            return stats;
+        }
+
+        function renderStats(stats) {
+            const container = document.getElementById('statsGrid');
+            container.innerHTML = '';
+            
+            selectedCurrencies.forEach(currency => {
+                const stat = stats[currency];
+                if (!stat) return;
+                
+                const card = document.createElement('div');
+                card.className = 'stat-card';
+                card.innerHTML = `
+                    <div class="value">${stat.current}</div>
+                    <div class="label">${CURRENCY_NAMES[currency] || currency}</div>
+                    <div style="margin-top: 8px; font-size: 12px; color: ${stat.change >= 0 ? '#4ade80' : '#f87171'};">
+                        ${stat.change >= 0 ? '↑' : '↓'} ${Math.abs(stat.change)}%
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function renderCurrencySelector() {
+            const container = document.getElementById('currencySelector');
+            container.innerHTML = '';
+            
+            const allCurrencies = Object.keys(historicalData[0].rates);
+            
+            allCurrencies.forEach(currency => {
+                const btn = document.createElement('button');
+                btn.className = `currency-btn ${selectedCurrencies.includes(currency) ? 'active' : ''}`;
+                btn.textContent = `${currency} ${CURRENCY_NAMES[currency] || ''}`;
+                btn.onclick = () => toggleCurrency(currency);
+                container.appendChild(btn);
+            });
+        }
+
+        function toggleCurrency(currency) {
+            if (selectedCurrencies.includes(currency)) {
+                if (selectedCurrencies.length > 1) {
+                    selectedCurrencies = selectedCurrencies.filter(c => c !== currency);
+                }
+            } else {
+                selectedCurrencies.push(currency);
+            }
+            updateCharts();
+        }
+
+        function renderTrendChart() {
+            const ctx = document.getElementById('trendChart').getContext('2d');
+            const dates = historicalData.map(d => d.date.slice(5)); // MM-DD
+            
+            const datasets = selectedCurrencies.map((currency, index) => {
+                const colors = ['#60a5fa', '#f472b6', '#4ade80', '#fbbf24', '#a78bfa', '#f87171'];
+                const values = historicalData.map(d => d.rates[currency]);
+                
+                return {
+                    label: `${currency} (${CURRENCY_NAMES[currency]})`,
+                    data: values,
+                    borderColor: colors[index % colors.length],
+                    backgroundColor: colors[index % colors.length] + '20',
+                    tension: 0.4,
+                    fill: false
+                };
+            });
+
+            if (trendChart) trendChart.destroy();
+            
+            trendChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: {
+                            labels: { color: '#94a3b8' }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255,255,255,0.1)' },
+                            ticks: { color: '#94a3b8' }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255,255,255,0.1)' },
+                            ticks: { color: '#94a3b8' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderVolatilityChart() {
+            const ctx = document.getElementById('volatilityChart').getContext('2d');
+            const stats = calculateStats(historicalData);
+            
+            const labels = selectedCurrencies.map(c => CURRENCY_NAMES[c] || c);
+            const volatilities = selectedCurrencies.map(c => parseFloat(stats[c]?.volatility || 0));
+            const changes = selectedCurrencies.map(c => parseFloat(stats[c]?.change || 0));
+
+            if (volatilityChart) volatilityChart.destroy();
+            
+            volatilityChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: '波动幅度 (%)',
+                            data: volatilities,
+                            backgroundColor: '#60a5fa80',
+                            borderColor: '#60a5fa',
+                            borderWidth: 1
+                        },
+                        {
+                            label: '累计涨跌 (%)',
+                            data: changes,
+                            backgroundColor: changes.map(v => v >= 0 ? '#4ade8080' : '#f8717180'),
+                            borderColor: changes.map(v => v >= 0 ? '#4ade80' : '#f87171'),
+                            borderWidth: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: { color: '#94a3b8' }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255,255,255,0.1)' },
+                            ticks: { color: '#94a3b8' }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255,255,255,0.1)' },
+                            ticks: { color: '#94a3b8' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateCharts() {
+            const stats = calculateStats(historicalData);
+            renderStats(stats);
+            renderCurrencySelector();
+            renderTrendChart();
+            renderVolatilityChart();
+        }
+
+        async function init() {
+            try {
+                historicalData = await fetchHistoricalData();
+                
+                if (historicalData.length < 2) {
+                    throw new Error('至少需要2天的数据才能生成趋势图');
+                }
+
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('content').style.display = 'block';
+                
+                updateCharts();
+                
+            } catch (e) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = '加载失败: ' + e.message;
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
